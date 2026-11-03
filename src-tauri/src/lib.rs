@@ -1,7 +1,11 @@
 mod accounts;
+mod commands_data;
+mod data;
+mod dates;
 mod db;
 mod kdf;
 mod keyslot;
+mod money;
 
 use accounts::{RecoveryInfo, RecoverySetup};
 use rusqlite::Connection;
@@ -11,7 +15,6 @@ use zeroize::Zeroizing;
 
 struct Session {
     name: String,
-    #[allow(dead_code)]
     conn: Connection,
 }
 
@@ -169,7 +172,19 @@ pub fn run() {
             change_password,
             recovery_info,
             recover_account,
-            set_recovery
+            set_recovery,
+            commands_data::list_snapshots,
+            commands_data::add_snapshot,
+            commands_data::update_snapshot,
+            commands_data::delete_snapshot,
+            commands_data::list_categories,
+            commands_data::add_category,
+            commands_data::update_category,
+            commands_data::delete_category,
+            commands_data::list_operations,
+            commands_data::add_operation,
+            commands_data::update_operation,
+            commands_data::delete_operation
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import Main from "./Workspace";
 
 type RecKind = "code" | "question" | "none";
 type RecInfo = { kind: string; question: string | null } | null;
@@ -78,7 +79,7 @@ export default function App() {
 
   if (codeToShow) {
     return (
-      <div style={{ padding: 24, fontFamily: "system-ui, sans-serif" }}>
+      <div style={{ padding: 24, fontFamily: "system-ui, sans-serif", color: "#111", background: "#fff", minHeight: "100vh", colorScheme: "light" }}>
         <h2>Код восстановления</h2>
         <p style={{ fontSize: 24, letterSpacing: 2, fontFamily: "monospace" }}>{codeToShow}</p>
         <p>Сохраните его сейчас (менеджер паролей или бумага). Он <b>не будет показан снова</b>. Без пароля и без этого кода данные не восстановить.</p>
@@ -88,7 +89,7 @@ export default function App() {
   }
 
   return (
-    <div style={{ padding: 24, fontFamily: "system-ui, sans-serif" }}>
+    <div style={{ padding: 24, fontFamily: "system-ui, sans-serif", color: "#111", background: "#fff", minHeight: "100vh", colorScheme: "light" }}>
       <h2>BudgetMaster</h2>
       {msg && <p style={{ color: "#b00" }}>{msg}</p>}
 
@@ -152,6 +153,9 @@ export default function App() {
       {user && (
         <>
           <p>Вы вошли как <b>{user}</b>. Таблиц в БД: {tables}</p>
+          <Main />
+          <details style={{ marginBottom: 24 }}>
+            <summary>Учётка: пароль и восстановление</summary>
           <div style={box}>
             <h3>Сменить пароль</h3>
             <input type="password" placeholder="Текущий пароль" value={oldPw} onChange={(e) => setOldPw(e.target.value)} />
@@ -173,6 +177,7 @@ export default function App() {
               }
             >Применить</button>
           </div>
+          </details>
           <button onClick={() => run(() => invoke("logout"), "Вы вышли")}>Выйти</button>
         </>
       )}

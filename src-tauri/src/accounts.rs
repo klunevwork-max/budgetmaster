@@ -300,8 +300,11 @@ mod tests {
     use super::*;
 
     fn tmp() -> std::path::PathBuf {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static COUNTER: AtomicUsize = AtomicUsize::new(0);
         let n = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
-        let d = std::env::temp_dir().join(format!("bm_test_{n}"));
+        let c = COUNTER.fetch_add(1, Ordering::SeqCst);
+        let d = std::env::temp_dir().join(format!("bm_test_{}_{n}_{c}", std::process::id()));
         fs::create_dir_all(&d).unwrap();
         d
     }
