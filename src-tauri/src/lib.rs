@@ -1,7 +1,9 @@
 mod accounts;
 mod db;
 mod kdf;
+mod keyslot;
 
+use accounts::{RecoveryInfo, RecoverySetup};
 use rusqlite::Connection;
 use std::{path::PathBuf, sync::Mutex};
 use tauri::{Manager, State};
@@ -9,6 +11,7 @@ use zeroize::Zeroizing;
 
 struct Session {
     name: String,
+    #[allow(dead_code)]
     conn: Connection,
 }
 
@@ -23,10 +26,31 @@ fn data_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     Ok(dir)
 }
 
+fn parse_setup(kind: &str, question: Option<String>, answer: Option<String>) -> Result<RecoverySetup, String> {
+    match kind {
+        "none" => Ok(RecoverySetup::None),
+        "code" => Ok(RecoverySetup::Code),
+        "question" => Ok(RecoverySetup::Question {
+            question: question.unwrap_or_default(),
+            answer: answer.unwrap_or_default(),
+        }),
+        _ => Err("Неизвестный способ восстановления".into()),
+    }
+}
+
+fn current_name(state: &State<'_, AppState>) -> Result<String, String> {
+    state
+        .session
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|s| s.name.clone())
+        .ok_or_else(|| "Не выполнен вход".to_string())
+}
+
 #[tauri::command]
 async fn list_accounts(app: tauri::AppHandle) -> Result<Vec<String>, String> {
-    let dir = data_dir(&app)?;
-    accounts::list_accounts(&dir).map_err(|e| e.to_string())
+    accounts::list_accounts(&data_dir(&app)?).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -35,12 +59,17 @@ async fn create_account(
     state: State<'_, AppState>,
     name: String,
     password: String,
-) -> Result<(), String> {
+    recovery_kind: String,
+    question: Option<String>,
+    answer: Option<String>,
+) -> Result<Option<String>, String> {
     let password = Zeroizing::new(password);
+    let setup = parse_setup(&recovery_kind, question, answer)?;
     let dir = data_dir(&app)?;
-    let conn = accounts::create_account(&dir, &name, &password).map_err(|e| e.to_string())?;
+    let (conn, code) =
+        accounts::create_account(&dir, &name, &password, setup).map_err(|e| e.to_string())?;
     *state.session.lock().unwrap() = Some(Session { name: name.trim().to_string(), conn });
-    Ok(())
+    Ok(code)
 }
 
 #[tauri::command]
@@ -59,7 +88,7 @@ async fn login(
 
 #[tauri::command]
 async fn logout(state: State<'_, AppState>) -> Result<(), String> {
-    *state.session.lock().unwrap() = None; // соединение закрывается
+    *state.session.lock().unwrap() = None;
     Ok(())
 }
 
@@ -86,25 +115,44 @@ async fn change_password(
 ) -> Result<(), String> {
     let old = Zeroizing::new(old_password);
     let new = Zeroizing::new(new_password);
-    let dir = data_dir(&app)?;
-    // Закрываем сессионное соединение, чтобы файл не был заблокирован
-    let name = {
-        let mut g = state.session.lock().unwrap();
-        g.take().map(|s| s.name).ok_or("Не выполнен вход")?
-    };
-    match accounts::change_password(&dir, &name, &old, &new) {
-        Ok(conn) => {
-            *state.session.lock().unwrap() = Some(Session { name, conn });
-            Ok(())
-        }
-        Err(e) => {
-            // Пытаемся восстановить сессию со старым паролем
-            if let Ok((conn, _)) = accounts::open_account(&dir, &name, &old) {
-                *state.session.lock().unwrap() = Some(Session { name, conn });
-            }
-            Err(e.to_string())
-        }
-    }
+    let name = current_name(&state)?;
+    accounts::change_password(&data_dir(&app)?, &name, &old, &new).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn recovery_info(app: tauri::AppHandle, name: String) -> Result<Option<RecoveryInfo>, String> {
+    accounts::recovery_info(&data_dir(&app)?, &name).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn recover_account(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    name: String,
+    secret: String,
+    new_password: String,
+) -> Result<(), String> {
+    let secret = Zeroizing::new(secret);
+    let new = Zeroizing::new(new_password);
+    let conn = accounts::recover_account(&data_dir(&app)?, &name, &secret, &new)
+        .map_err(|e| e.to_string())?;
+    *state.session.lock().unwrap() = Some(Session { name, conn });
+    Ok(())
+}
+
+#[tauri::command]
+async fn set_recovery(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    password: String,
+    recovery_kind: String,
+    question: Option<String>,
+    answer: Option<String>,
+) -> Result<Option<String>, String> {
+    let password = Zeroizing::new(password);
+    let setup = parse_setup(&recovery_kind, question, answer)?;
+    let name = current_name(&state)?;
+    accounts::set_recovery(&data_dir(&app)?, &name, &password, setup).map_err(|e| e.to_string())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -118,7 +166,10 @@ pub fn run() {
             logout,
             session_info,
             table_count,
-            change_password
+            change_password,
+            recovery_info,
+            recover_account,
+            set_recovery
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -17,7 +17,7 @@ impl KdfParams {
         KdfParams { algo: "argon2id".into(), version: 1, m_kib: 65536, t: 3, p: 1 }
     }
 
-    /// Границы из ТЗ (раздел 3). Проверяется при чтении из любого источника.
+    /// Границы из ТЗ. Проверяются при чтении из любого источника.
     pub fn validate(&self) -> Result<()> {
         if self.algo != "argon2id" || self.version != 1 {
             bail!("Недопустимые параметры KDF: неподдерживаемый алгоритм или версия");
@@ -32,24 +32,20 @@ impl KdfParams {
     }
 }
 
-pub fn derive_key(password: &str, salt: &[u8; 16], p: &KdfParams) -> Result<Zeroizing<[u8; 32]>> {
+pub fn derive_key(secret: &str, salt: &[u8; 16], p: &KdfParams) -> Result<Zeroizing<[u8; 32]>> {
     p.validate()?;
     let params = Params::new(p.m_kib, p.t, p.p, Some(32)).map_err(|e| anyhow!("{e}"))?;
     let argon = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
     let mut key = Zeroizing::new([0u8; 32]);
     argon
-        .hash_password_into(password.as_bytes(), salt, &mut *key)
+        .hash_password_into(secret.as_bytes(), salt, &mut *key)
         .map_err(|e| anyhow!("{e}"))?;
     Ok(key)
 }
 
-/// Сырой ключ SQLCipher: x'<32 байта ключа><16 байт соли>'
+/// Сырой ключ SQLCipher: x'<32 байта мастер-ключа><16 байт соли>'
 pub fn key_pragma(key: &[u8; 32], salt: &[u8; 16]) -> Zeroizing<String> {
     Zeroizing::new(format!("PRAGMA key = \"x'{}{}'\";", hex::encode(key), hex::encode(salt)))
-}
-
-pub fn rekey_pragma(key: &[u8; 32], salt: &[u8; 16]) -> Zeroizing<String> {
-    Zeroizing::new(format!("PRAGMA rekey = \"x'{}{}'\";", hex::encode(key), hex::encode(salt)))
 }
 
 #[cfg(test)]
