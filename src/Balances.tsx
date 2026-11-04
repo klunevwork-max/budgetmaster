@@ -16,12 +16,27 @@ type LineBalance = {
   line_id: number; owner: string; region_name: string; place: string; name: string;
   currency: string; date: string | null; amount: string | null;
 };
-type Total = { currency: string; amount: string };
-type Balances = { rows: LineBalance[]; totals: Total[] };
+type GroupPart = { currency: string; amount: string };
+type GroupTotal = { label: string; parts: GroupPart[]; kzt: string | null };
+type RateUsed = { currency: string; rate: string; source_date: string; source: string; gap_days: number };
+type Balances = {
+  rows: LineBalance[]; groups: GroupTotal[]; grand_kzt: string | null;
+  rates: RateUsed[]; missing_rates: string[];
+};
+type Refresh = { requested: number; fetched: number; failed: string[]; offline: boolean; skipped: boolean };
 
 const daysBetween = (a: string, b: string) => Math.round((Date.parse(a) - Date.parse(b)) / 86400000);
 
 /* ---------------- Актуальные балансы ---------------- */
+
+const GROUPS: [string, string][] = [
+  ["currency", "валюте"],
+  ["region", "региону"],
+  ["region_currency", "региону и валюте"],
+  ["owner", "владельцу"],
+  ["owner_currency", "владельцу и валюте"],
+  ["all", "всего"],
+];
 
 export function CurrentTab({ hide }: { hide: boolean }) {
   const [owners, setOwners] = useState<Item[]>([]);
@@ -29,20 +44,37 @@ export function CurrentTab({ hide }: { hide: boolean }) {
   const [ownerId, setOwnerId] = useState("");
   const [region, setRegion] = useState("");
   const [hideZero, setHideZero] = useState(true);
-  const [data, setData] = useState<Balances>({ rows: [], totals: [] });
+  const [group, setGroup] = useState("region_currency");
+  const [data, setData] = useState<Balances>({ rows: [], groups: [], grand_kzt: null, rates: [], missing_rates: [] });
+  const [rep, setRep] = useState<Refresh | null>(null);
+  const [tick, setTick] = useState(0);
   const [msg, setMsg] = useState("");
 
   useEffect(() => {
     invoke<Item[]>("list_owners").then(setOwners).catch((e) => setMsg(String(e)));
   }, []);
 
+  // дозагрузка курсов НБРК на выбранную дату (если нужна и не закэширована)
   useEffect(() => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(asOf)) return;
+    let cancelled = false;
+    invoke<Refresh>("refresh_rates", { dates: [asOf] })
+      .then((r) => { if (!cancelled) { setRep(r); setTick((t) => t + 1); } })
+      .catch((e) => { if (!cancelled) setMsg(String(e)); });
+    return () => { cancelled = true; };
+  }, [asOf]);
+
+  useEffect(() => {
+    let cancelled = false;
     invoke<Balances>("current_balances", {
-      asOf, ownerId: ownerId ? Number(ownerId) : null, region, hideZero,
+      asOf, ownerId: ownerId ? Number(ownerId) : null, region, hideZero, group,
     })
-      .then((d) => { setData(d); setMsg(""); })
-      .catch((e) => setMsg(String(e)));
-  }, [asOf, ownerId, region, hideZero]);
+      .then((d) => { if (!cancelled) { setData(d); setMsg(""); } })
+      .catch((e) => { if (!cancelled) setMsg(String(e)); });
+    return () => { cancelled = true; };
+  }, [asOf, ownerId, region, hideZero, group, tick]);
+
+  const warnRates = data.rates.filter((r) => r.gap_days > 7 || r.source === "cache_prev");
 
   return (
     <div>
@@ -90,18 +122,54 @@ export function CurrentTab({ hide }: { hide: boolean }) {
         </tbody>
       </table>
 
-      <h4>Итого по валютам</h4>
-      <table style={{ borderCollapse: "collapse" }}>
+      <h4>Итого</h4>
+      <div style={bar}>
+        <label>
+          Группировать по:{" "}
+          <select value={group} onChange={(e) => setGroup(e.target.value)}>
+            {GROUPS.map(([k, t]) => <option key={k} value={k}>{t}</option>)}
+          </select>
+        </label>
+      </div>
+      <table style={{ borderCollapse: "collapse", marginBottom: 8 }}>
+        <thead>
+          <tr><th style={cell}>Группа</th><th style={cellR}>Суммы по валютам</th><th style={cellR}>≈ в KZT</th></tr>
+        </thead>
         <tbody>
-          {data.totals.map((t) => (
-            <tr key={t.currency}>
-              <td style={cell}><b>{t.currency}</b></td>
-              <td style={cellR}><b><Amt a={t.amount} hide={hide} /></b></td>
+          {data.groups.map((g) => (
+            <tr key={g.label}>
+              <td style={cell}>{g.label}</td>
+              <td style={cellR}>
+                {g.parts.map((p) => (
+                  <div key={p.currency}><Amt a={p.amount} hide={hide} /> {p.currency}</div>
+                ))}
+              </td>
+              <td style={cellR}>{g.kzt === null ? "н/д" : <Amt a={g.kzt} hide={hide} />}</td>
             </tr>
           ))}
-          {data.totals.length === 0 && <tr><td style={cell}>—</td></tr>}
+          <tr>
+            <td style={cell}><b>Всего в KZT</b></td>
+            <td style={cell}></td>
+            <td style={cellR}><b>{data.grand_kzt === null ? "н/д" : <Amt a={data.grand_kzt} hide={hide} />}</b></td>
+          </tr>
         </tbody>
       </table>
+
+      {data.rates.length > 0 && (
+        <p><small>
+          Курсы НБРК (KZT за 1 ед.): {data.rates.map((r) => `${r.currency} ${r.rate} (на ${r.source_date})`).join(" · ")}
+        </small></p>
+      )}
+      {warnRates.length > 0 && (
+        <p style={{ color: "#b60" }}><small>
+          Курс не на выбранную дату: {warnRates.map((r) => `${r.currency} — ${r.source === "cache_prev" ? "из кэша, не обновлён" : "разрыв"} ${r.gap_days} дн.`).join("; ")}.
+        </small></p>
+      )}
+      {data.missing_rates.length > 0 && (
+        <p style={{ color: "#b00" }}><small>
+          Нет курса: {data.missing_rates.join(", ")}. Итоги в KZT неполные{rep?.offline ? " (нет связи с НБРК)" : ""}.
+        </small></p>
+      )}
     </div>
   );
 }

@@ -73,6 +73,18 @@ pub fn format_grouped(v: i64) -> String {
     format!("{}{}.{:02}", if v < 0 { "-" } else { "" }, out, a % 100)
 }
 
+/// Деление с округлением half-to-even (банковское). d > 0.
+pub fn div_round_half_even(n: i128, d: i128) -> i128 {
+    let q = n.div_euclid(d);
+    let r = n.rem_euclid(d);
+    let twice = r * 2;
+    if twice > d || (twice == d && q % 2 != 0) {
+        q + 1
+    } else {
+        q
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -92,6 +104,18 @@ mod tests {
         for bad in ["", "abc", "1.234", "1.2.3", "--5", "1e5", "99999999999999999999", "20000000000000"] {
             assert!(parse_amount(bad).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn half_even() {
+        assert_eq!(div_round_half_even(25, 10), 2);
+        assert_eq!(div_round_half_even(35, 10), 4);
+        assert_eq!(div_round_half_even(26, 10), 3);
+        assert_eq!(div_round_half_even(24, 10), 2);
+        assert_eq!(div_round_half_even(-25, 10), -2);
+        assert_eq!(div_round_half_even(-35, 10), -4);
+        assert_eq!(div_round_half_even(-26, 10), -3);
+        assert_eq!(div_round_half_even(-24, 10), -2);
     }
 
     #[test]

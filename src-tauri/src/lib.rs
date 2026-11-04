@@ -1,5 +1,6 @@
 mod accounts;
 mod commands_data;
+mod commands_rates;
 mod data;
 mod dates;
 mod db;
@@ -7,6 +8,7 @@ mod kdf;
 mod keyslot;
 mod keystore;
 mod money;
+mod rates;
 
 use accounts::{AccountInfo, RecoveryInfo, RecoverySetup};
 use rusqlite::Connection;
@@ -178,6 +180,7 @@ pub fn run() {
             recovery_info,
             recover_account,
             set_recovery,
+            commands_rates::refresh_rates,
             commands_data::list_owners,
             commands_data::add_owner,
             commands_data::rename_owner,

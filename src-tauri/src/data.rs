@@ -3,7 +3,9 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 
 use crate::dates::validate_date;
-use crate::money::{format_grouped, MAX_MINOR};
+use crate::money::{div_round_half_even, format_grouped, MAX_MINOR};
+use crate::rates::{self, SCALE};
+use std::collections::HashMap;
 
 pub const CURRENCIES: [&str; 4] = ["KZT", "USD", "EUR", "RUB"];
 
@@ -408,30 +410,97 @@ pub struct LineBalance {
 }
 
 #[derive(Serialize)]
-pub struct CurrencyTotal {
+pub struct GroupPart {
     pub currency: String,
     pub amount_minor: i64,
     pub amount: String,
 }
 
 #[derive(Serialize)]
-pub struct Balances {
-    pub rows: Vec<LineBalance>,
-    pub totals: Vec<CurrencyTotal>,
+pub struct GroupTotal {
+    pub label: String,
+    pub parts: Vec<GroupPart>,
+    pub kzt_minor: Option<i64>,
+    pub kzt: Option<String>,
 }
 
-/// Остаток по каждому счёту = последняя позиция на дату <= as_of.
-/// Счета без позиций на эту дату возвращаются с date/amount = None.
+#[derive(Serialize)]
+pub struct RateUsed {
+    pub currency: String,
+    pub rate: String,
+    pub source_date: String,
+    pub source: String,
+    pub gap_days: i64,
+}
+
+#[derive(Serialize)]
+pub struct Balances {
+    pub rows: Vec<LineBalance>,
+    pub groups: Vec<GroupTotal>,
+    pub grand_kzt_minor: Option<i64>,
+    pub grand_kzt: Option<String>,
+    pub rates: Vec<RateUsed>,
+    pub missing_rates: Vec<String>,
+}
+
+fn cur_pos(c: &str) -> usize {
+    CURRENCIES.iter().position(|x| *x == c).unwrap_or(usize::MAX)
+}
+
+fn fmt_rate(rs: i64) -> String {
+    format!("{}.{:04}", rs / SCALE, (rs % SCALE) / 100)
+}
+
+fn add_part(parts: &mut Vec<(String, i64)>, cur: &str, m: i64) -> Result<()> {
+    match parts.iter_mut().find(|e| e.0 == cur) {
+        Some(e) => e.1 = e.1.checked_add(m).ok_or_else(|| anyhow!("Переполнение суммы"))?,
+        None => parts.push((cur.to_string(), m)),
+    }
+    Ok(())
+}
+
+/// Эквивалент в KZT: суммы × курсы без промежуточного округления, одно банковское округление в конце.
+fn to_kzt(parts: &[(String, i64)], rate_map: &HashMap<String, Option<rates::Rate>>) -> Option<i64> {
+    let mut sum: i128 = 0;
+    for (cur, amount) in parts {
+        let r = rate_map.get(cur)?.as_ref()?;
+        sum += (*amount as i128) * (r.rate_scaled as i128);
+    }
+    i64::try_from(div_round_half_even(sum, SCALE as i128)).ok()
+}
+
+/// (ключ сортировки, подпись группы)
+fn group_key(row: &LineBalance, group: &str) -> ((String, usize), String) {
+    let pos = cur_pos(&row.currency);
+    let owner = if row.owner.is_empty() { "—".to_string() } else { row.owner.clone() };
+    match group {
+        "currency" => ((String::new(), pos), row.currency.clone()),
+        "region" => ((row.region_name.clone(), 0), row.region_name.clone()),
+        "region_currency" => ((row.region_name.clone(), pos), format!("{} · {}", row.region_name, row.currency)),
+        "owner" => ((owner.clone(), 0), owner),
+        "owner_currency" => ((owner.clone(), pos), format!("{} · {}", owner, row.currency)),
+        _ => ((String::new(), 0), "Всего".to_string()),
+    }
+}
+
+const GROUPS: [&str; 6] = ["currency", "region", "region_currency", "owner", "owner_currency", "all"];
+
+/// Остаток по каждому счёту = последняя позиция на дату <= as_of (нет позиций -> date/amount = None).
+/// Итоги группируются по `group`; эквиваленты в KZT считаются по курсам из кэша на as_of.
 pub fn current_balances(
     conn: &Connection,
     as_of: &str,
     owner_id: Option<i64>,
     region: Option<&str>,
     hide_zero: bool,
+    group: &str,
 ) -> Result<Balances> {
     validate_date(as_of)?;
     if let Some(r) = region {
         check_region(r)?;
+    }
+    if !GROUPS.contains(&group) {
+        bail!("Недопустимая группировка итогов");
     }
     let mut st = conn.prepare(
         "SELECT l.id, l.owner_id, o.name, l.region, b.name, l.name, l.currency,
@@ -472,21 +541,76 @@ pub fn current_balances(
         out.retain(|r| r.amount_minor != Some(0));
     }
 
-    let mut sums: Vec<(String, i64)> = Vec::new();
+    // суммы по группам и общие суммы по валютам
+    let mut agg: Vec<((String, usize), String, Vec<(String, i64)>)> = Vec::new();
+    let mut all: Vec<(String, i64)> = Vec::new();
     for row in &out {
-        if let Some(m) = row.amount_minor {
-            match sums.iter_mut().find(|e| e.0 == row.currency) {
-                Some(e) => e.1 = e.1.checked_add(m).ok_or_else(|| anyhow!("Переполнение суммы"))?,
-                None => sums.push((row.currency.clone(), m)),
+        let Some(m) = row.amount_minor else { continue };
+        let (key, label) = group_key(row, group);
+        let idx = match agg.iter().position(|e| e.0 == key) {
+            Some(i) => i,
+            None => {
+                agg.push((key, label, Vec::new()));
+                agg.len() - 1
             }
+        };
+        add_part(&mut agg[idx].2, &row.currency, m)?;
+        add_part(&mut all, &row.currency, m)?;
+    }
+    all.sort_by_key(|e| cur_pos(&e.0));
+
+    // курсы на as_of по каждой валюте, которая встречается в суммах
+    let mut rate_map: HashMap<String, Option<rates::Rate>> = HashMap::new();
+    for (cur, _) in &all {
+        rate_map.insert(cur.clone(), rates::lookup(conn, cur, as_of)?);
+    }
+
+    agg.sort_by(|a, b| a.0.cmp(&b.0));
+    let groups: Vec<GroupTotal> = agg
+        .into_iter()
+        .map(|(_, label, mut parts)| {
+            parts.sort_by_key(|e| cur_pos(&e.0));
+            let kzt_minor = to_kzt(&parts, &rate_map);
+            GroupTotal {
+                label,
+                kzt: kzt_minor.map(format_grouped),
+                kzt_minor,
+                parts: parts
+                    .into_iter()
+                    .map(|(currency, m)| GroupPart { amount: format_grouped(m), currency, amount_minor: m })
+                    .collect(),
+            }
+        })
+        .collect();
+
+    let grand_kzt_minor = to_kzt(&all, &rate_map);
+
+    let mut rates_used = Vec::new();
+    let mut missing = Vec::new();
+    for (cur, _) in &all {
+        if cur == "KZT" {
+            continue;
+        }
+        match rate_map.get(cur).and_then(|r| r.as_ref()) {
+            Some(r) => rates_used.push(RateUsed {
+                rate: fmt_rate(r.rate_scaled),
+                gap_days: rates::gap_days(as_of, &r.source_date),
+                source_date: r.source_date.clone(),
+                source: r.source.clone(),
+                currency: cur.clone(),
+            }),
+            None => missing.push(cur.clone()),
         }
     }
-    sums.sort_by_key(|e| CURRENCIES.iter().position(|c| *c == e.0).unwrap_or(usize::MAX));
-    let totals = sums
-        .into_iter()
-        .map(|(currency, m)| CurrencyTotal { amount: format_grouped(m), currency, amount_minor: m })
-        .collect();
-    Ok(Balances { rows: out, totals })
+
+    Ok(Balances {
+        rows: out,
+        groups,
+        grand_kzt: grand_kzt_minor.map(format_grouped),
+        grand_kzt_minor,
+        rates: rates_used,
+        missing_rates: missing,
+    })
 }
 
 // ---------------------------------------------------------------- категории
@@ -778,35 +902,80 @@ mod tests {
         let b = add_line(&c, me, "KZ", "bank", Some(bank), "Депозит", "KZT").unwrap();
         let w = add_line(&c, wife, "RU", "cash", None, "Кошелёк", "KZT").unwrap();
         let closed = add_line(&c, me, "KZ", "cash", None, "Старый", "USD").unwrap();
+        let usd = add_line(&c, me, "KZ", "cash", None, "USD нал", "USD").unwrap();
         add_snapshot(&c, a, "2026-10-01", 100_000_00).unwrap();
         add_snapshot(&c, a, "2026-11-01", 150_000_00).unwrap();
         add_snapshot(&c, b, "2026-10-15", -20_000_00).unwrap();
         add_snapshot(&c, w, "2026-10-20", 5_000_00).unwrap();
         add_snapshot(&c, closed, "2026-09-01", 10_00).unwrap();
         add_snapshot(&c, closed, "2026-10-01", 0).unwrap(); // счёт закрыт нулём
+        add_snapshot(&c, usd, "2026-11-01", 100_00).unwrap();
 
-        // на 3 ноября: последняя позиция по каждому счёту, закрытый (0) скрыт
-        let r = current_balances(&c, "2026-11-03", None, None, true).unwrap();
-        assert_eq!(r.rows.len(), 3);
-        let kzt = r.totals.iter().find(|t| t.currency == "KZT").unwrap();
-        assert_eq!(kzt.amount_minor, 150_000_00 - 20_000_00 + 5_000_00);
-        assert!(r.totals.iter().all(|t| t.currency != "USD")); // нулевой USD скрыт
+        // курсов ещё нет: KZT считается, USD — «н/д»
+        let r = current_balances(&c, "2026-11-03", None, None, true, "currency").unwrap();
+        assert_eq!(r.rows.len(), 4); // закрытый (0) скрыт
+        let kzt = r.groups.iter().find(|g| g.label == "KZT").unwrap();
+        assert_eq!(kzt.parts[0].amount_minor, 150_000_00 - 20_000_00 + 5_000_00);
+        assert_eq!(kzt.kzt_minor, Some(13_500_000));
+        let usd_g = r.groups.iter().find(|g| g.label == "USD").unwrap();
+        assert_eq!(usd_g.kzt_minor, None);
+        assert_eq!(r.missing_rates, vec!["USD".to_string()]);
+        assert_eq!(r.grand_kzt_minor, None);
 
-        // на 10 октября: у депозита и кошелька ещё нет позиций
-        let r2 = current_balances(&c, "2026-10-10", None, None, true).unwrap();
-        assert_eq!(r2.rows.len(), 3);
-        assert_eq!(r2.rows.iter().filter(|x| x.amount_minor.is_none()).count(), 2);
-        assert_eq!(r2.totals.iter().find(|t| t.currency == "KZT").unwrap().amount_minor, 100_000_00);
+        // курс появился: 100.00 USD * 480.55 = 48 055.00 KZT
+        rates::store(&c, "USD", "2026-11-03", "2026-11-03", 480_550_000, "nbrk", 0).unwrap();
+        let r = current_balances(&c, "2026-11-03", None, None, true, "currency").unwrap();
+        let usd_g = r.groups.iter().find(|g| g.label == "USD").unwrap();
+        assert_eq!(usd_g.kzt_minor, Some(4_805_500));
+        assert_eq!(r.grand_kzt_minor, Some(13_500_000 + 4_805_500));
+        assert!(r.missing_rates.is_empty());
+        assert_eq!(r.rates.len(), 1);
+        assert_eq!((r.rates[0].rate.as_str(), r.rates[0].gap_days), ("480.5500", 0));
+
+        // группировка по региону: суммы по валютам внутри группы + эквивалент в KZT
+        let r = current_balances(&c, "2026-11-03", None, None, true, "region").unwrap();
+        let labels: Vec<&str> = r.groups.iter().map(|g| g.label.as_str()).collect();
+        assert_eq!(labels, vec!["Казахстан", "Россия"]);
+        assert_eq!(r.groups[0].parts.len(), 2); // KZT и USD
+        assert_eq!(r.groups[0].kzt_minor, Some(13_000_000 + 4_805_500));
+        assert_eq!(r.groups[1].kzt_minor, Some(500_000));
+
+        // регион и валюта
+        let r = current_balances(&c, "2026-11-03", None, None, true, "region_currency").unwrap();
+        let labels: Vec<&str> = r.groups.iter().map(|g| g.label.as_str()).collect();
+        assert_eq!(labels, vec!["Казахстан · KZT", "Казахстан · USD", "Россия · KZT"]);
+
+        // владелец
+        let r = current_balances(&c, "2026-11-03", None, None, true, "owner").unwrap();
+        let labels: Vec<&str> = r.groups.iter().map(|g| g.label.as_str()).collect();
+        assert_eq!(labels, vec!["Жена", "Костя"]);
+
+        // всего
+        let r = current_balances(&c, "2026-11-03", None, None, true, "all").unwrap();
+        assert_eq!(r.groups.len(), 1);
+        assert_eq!(r.groups[0].kzt_minor, r.grand_kzt_minor);
+
+        // курс из кэша на более позднюю дату (офлайн-запасной вариант)
+        let r = current_balances(&c, "2026-11-10", None, None, true, "currency").unwrap();
+        assert_eq!(r.rates[0].source, "cache_prev");
+        assert_eq!(r.rates[0].gap_days, 7);
+
+        // на 10 октября: у депозита, кошелька и USD ещё нет позиций
+        let r2 = current_balances(&c, "2026-10-10", None, None, true, "currency").unwrap();
+        assert_eq!(r2.rows.iter().filter(|x| x.amount_minor.is_none()).count(), 3);
+        assert_eq!(r2.groups.len(), 1);
+        assert_eq!(r2.groups[0].parts[0].amount_minor, 100_000_00);
 
         // фильтры
-        assert_eq!(current_balances(&c, "2026-11-03", Some(wife), None, true).unwrap().rows.len(), 1);
-        assert_eq!(current_balances(&c, "2026-11-03", None, Some("RU"), true).unwrap().rows.len(), 1);
-        assert_eq!(current_balances(&c, "2026-11-03", None, Some("KZ"), true).unwrap().rows.len(), 2);
-        assert_eq!(current_balances(&c, "2026-11-03", None, None, false).unwrap().rows.len(), 4);
-        assert!(current_balances(&c, "2026-11-03", None, Some("XX"), true).is_err());
-        assert!(current_balances(&c, "2026-13-03", None, None, true).is_err());
+        assert_eq!(current_balances(&c, "2026-11-03", Some(wife), None, true, "all").unwrap().rows.len(), 1);
+        assert_eq!(current_balances(&c, "2026-11-03", None, Some("RU"), true, "all").unwrap().rows.len(), 1);
+        assert_eq!(current_balances(&c, "2026-11-03", None, Some("KZ"), true, "all").unwrap().rows.len(), 3);
+        assert_eq!(current_balances(&c, "2026-11-03", None, None, false, "all").unwrap().rows.len(), 5);
+        assert!(current_balances(&c, "2026-11-03", None, Some("XX"), true, "all").is_err());
+        assert!(current_balances(&c, "2026-13-03", None, None, true, "all").is_err());
+        assert!(current_balances(&c, "2026-11-03", None, None, true, "bogus").is_err());
 
-        let first = &current_balances(&c, "2026-11-03", Some(me), None, true).unwrap().rows[0];
+        let first = &current_balances(&c, "2026-11-03", Some(me), None, true, "all").unwrap().rows[0];
         assert_eq!(first.amount.as_deref(), Some("150\u{a0}000.00")); // группировка тысяч
     }
 

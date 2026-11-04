@@ -122,9 +122,10 @@ pub async fn current_balances(
     owner_id: Option<i64>,
     region: Option<String>,
     hide_zero: bool,
+    group: String,
 ) -> Result<data::Balances, String> {
     let region = opt(region);
-    with_conn(&state, |c| data::current_balances(c, &as_of, owner_id, region.as_deref(), hide_zero))
+    with_conn(&state, |c| data::current_balances(c, &as_of, owner_id, region.as_deref(), hide_zero, &group))
 }
 
 // ---- категории
