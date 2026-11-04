@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { CurrentTab, LinesTab, Snapshots } from "./Balances";
 import ReportTab from "./ReportTab";
-import { Amt, AmountInput, DeleteButton, bar, cell, cellR, formatInput, today } from "./ui";
+import { Amt, AmountInput, DeleteButton, bar, cell, cellR, formatInput, today, whole } from "./ui";
 
 const CURRENCIES = ["KZT", "USD", "EUR", "RUB"];
 
@@ -169,7 +169,7 @@ function Operations({ hide }: { hide: boolean }) {
                 <button
                   onClick={() => {
                     setEditId(o.id); setDate(o.date); setOpType(o.type); setCurrency(o.currency);
-                    setAmount(formatInput(o.amount)); setCatId(o.category_id ? String(o.category_id) : ""); setComment(o.comment ?? "");
+                    setAmount(formatInput(whole(o.amount))); setCatId(o.category_id ? String(o.category_id) : ""); setComment(o.comment ?? "");
                   }}
                 >Изменить</button>{" "}
                 <DeleteButton onConfirm={() => remove(o.id)} />
@@ -181,6 +181,11 @@ function Operations({ hide }: { hide: boolean }) {
     </div>
   );
 }
+
+const stickyTabs = {
+  position: "sticky" as const, top: 56, zIndex: 15, background: "#fff",
+  marginLeft: -24, marginRight: -24, padding: "8px 24px", borderBottom: "1px solid #ddd",
+};
 
 type Tab = "cur" | "rep" | "snap" | "lines" | "ops" | "cats";
 const TABS: [Tab, string][] = [
@@ -197,7 +202,7 @@ export default function Main() {
   const [hide, setHide] = useState(false);
   return (
     <div style={{ marginBottom: 24 }}>
-      <div style={bar}>
+      <div style={{ ...bar, ...stickyTabs }}>
         {TABS.map(([k, t]) => (
           <button key={k} disabled={tab === k} onClick={() => setTab(k)}>{t}</button>
         ))}

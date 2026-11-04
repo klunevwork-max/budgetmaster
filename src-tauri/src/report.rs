@@ -100,7 +100,7 @@ pub fn resolve_period(conn: &Connection, end: &str, start: Option<&str>) -> Resu
         }
         None => {
             let prev: Option<String> = conn.query_row(
-                "SELECT max(date) FROM balance_snapshots WHERE date < ?1",
+                "SELECT max(date) FROM balance_snapshots WHERE date < ?1 AND is_draft = 0",
                 params![end],
                 |r| r.get(0),
             )?;
@@ -141,7 +141,7 @@ fn balances_on(conn: &Connection, date: &str) -> Result<HashMap<String, i64>> {
     let mut st = conn.prepare(
         "SELECT l.currency,
                 sum((SELECT s.amount_minor FROM balance_snapshots s
-                      WHERE s.line_id = l.id AND s.date <= ?1 ORDER BY s.date DESC LIMIT 1))
+                      WHERE s.line_id = l.id AND s.date <= ?1 AND s.is_draft = 0 ORDER BY s.date DESC LIMIT 1))
          FROM balance_lines l GROUP BY l.currency",
     )?;
     let rows = st.query_map(params![date], |r| {
@@ -152,7 +152,7 @@ fn balances_on(conn: &Connection, date: &str) -> Result<HashMap<String, i64>> {
 
 fn snapshot_warning(conn: &Connection, label: &str, date: &str, warnings: &mut Vec<String>) -> Result<()> {
     let last: Option<String> = conn.query_row(
-        "SELECT max(date) FROM balance_snapshots WHERE date <= ?1",
+        "SELECT max(date) FROM balance_snapshots WHERE date <= ?1 AND is_draft = 0",
         params![date],
         |r| r.get(0),
     )?;
@@ -460,6 +460,20 @@ mod tests {
         let p = resolve_period(&c, "2026-11-01", None).unwrap();
         let d = needed_dates(&c, &p).unwrap();
         assert_eq!(d, vec!["2026-10-01".to_string(), "2026-10-20".to_string(), "2026-11-01".to_string()]);
+    }
+
+    #[test]
+    fn drafts_are_ignored() {
+        let c = conn();
+        seed(&c);
+        seed_rates(&c);
+        // черновик на 1 декабря (копия остатков на 1 ноября) не должен стать концом или началом периода
+        crate::data::copy_balances_to_date(&c, "2026-12-01").unwrap();
+        let p = resolve_period(&c, "2026-12-01", None).unwrap();
+        assert_eq!(p.start, "2026-11-01"); // последняя подтверждённая позиция
+        let r = build(&c, &p).unwrap();
+        assert!(r.warnings.iter().any(|w| w.contains("нет позиций")));
+        assert_eq!(r.delta_no_reval.as_deref(), Some("0.00"));
     }
 
     #[test]

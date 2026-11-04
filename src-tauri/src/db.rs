@@ -4,7 +4,7 @@ use std::path::Path;
 
 use crate::kdf::key_pragma;
 
-pub const LATEST_VERSION: i64 = 3;
+pub const LATEST_VERSION: i64 = 4;
 
 pub fn open_with_key(path: &Path, key: &[u8; 32], salt: &[u8; 16]) -> Result<Connection> {
     let conn = Connection::open(path)?;
@@ -36,6 +36,13 @@ pub fn migrate(conn: &Connection) -> Result<()> {
     }
     if v < 3 {
         let sql = format!("BEGIN;\n{SCHEMA_V3}\nPRAGMA user_version = 3;\nCOMMIT;");
+        if let Err(e) = conn.execute_batch(&sql) {
+            let _ = conn.execute_batch("ROLLBACK;");
+            return Err(e.into());
+        }
+    }
+    if v < 4 {
+        let sql = format!("BEGIN;\n{SCHEMA_V4}\nPRAGMA user_version = 4;\nCOMMIT;");
         if let Err(e) = conn.execute_batch(&sql) {
             let _ = conn.execute_batch("ROLLBACK;");
             return Err(e.into());
@@ -252,5 +259,32 @@ mod tests_v3 {
         assert!(c.prepare("SELECT owner FROM balance_lines").is_err()); // старый столбец удалён
         let v: i64 = c.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
         assert_eq!(v, LATEST_VERSION);
+    }
+}
+
+const SCHEMA_V4: &str = r#"
+ALTER TABLE balance_snapshots ADD COLUMN is_draft INTEGER NOT NULL DEFAULT 0 CHECK (is_draft IN (0,1));
+"#;
+
+#[cfg(test)]
+mod tests_v4 {
+    use super::*;
+
+    #[test]
+    fn drafts_column_exists() {
+        let c = Connection::open_in_memory().unwrap();
+        migrate(&c).unwrap();
+        c.execute_batch(
+            "INSERT INTO banks(name) VALUES ('B');
+             INSERT INTO owners(name) VALUES ('O');
+             INSERT INTO balance_lines(owner_id, region, kind, bank_id, name, currency) VALUES (1,'KZ','bank',1,'X','KZT');
+             INSERT INTO balance_snapshots(line_id, date, amount_minor) VALUES (1,'2026-10-01',5);",
+        )
+        .unwrap();
+        let d: i64 = c.query_row("SELECT is_draft FROM balance_snapshots", [], |r| r.get(0)).unwrap();
+        assert_eq!(d, 0);
+        assert!(c
+            .execute("INSERT INTO balance_snapshots(line_id, date, amount_minor, is_draft) VALUES (1,'2026-10-02',5,2)", [])
+            .is_err());
     }
 }

@@ -319,11 +319,12 @@ pub struct Snapshot {
     pub currency: String,
     pub amount_minor: i64,
     pub amount: String,
+    pub is_draft: bool,
 }
 
 pub fn list_snapshots(conn: &Connection) -> Result<Vec<Snapshot>> {
     let mut st = conn.prepare(
-        "SELECT s.id, s.line_id, o.name, l.region, b.name, l.name, l.currency, s.date, s.amount_minor
+        "SELECT s.id, s.line_id, o.name, l.region, b.name, l.name, l.currency, s.date, s.amount_minor, s.is_draft
          FROM balance_snapshots s
          JOIN balance_lines l ON l.id = s.line_id
          LEFT JOIN owners o ON o.id = l.owner_id
@@ -345,6 +346,7 @@ pub fn list_snapshots(conn: &Connection) -> Result<Vec<Snapshot>> {
             currency,
             amount_minor: m,
             amount: format_grouped(m),
+            is_draft: r.get::<_, i64>(9)? != 0,
         })
     })?;
     Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
@@ -377,7 +379,7 @@ pub fn update_snapshot(conn: &Connection, id: i64, line_id: i64, date: &str, amo
     line_currency(conn, line_id)?;
     let n = conn
         .execute(
-            "UPDATE balance_snapshots SET line_id = ?1, date = ?2, amount_minor = ?3 WHERE id = ?4",
+            "UPDATE balance_snapshots SET line_id = ?1, date = ?2, amount_minor = ?3, is_draft = 0 WHERE id = ?4",
             params![line_id, date, amount_minor, id],
         )
         .map_err(|e| db_err(e, SNAP_DUP))?;
@@ -407,6 +409,7 @@ pub struct LineBalance {
     pub date: Option<String>,
     pub amount_minor: Option<i64>,
     pub amount: Option<String>,
+    pub is_draft: bool,
 }
 
 #[derive(Serialize)]
@@ -507,6 +510,8 @@ pub fn current_balances(
             (SELECT s.date FROM balance_snapshots s
               WHERE s.line_id = l.id AND s.date <= ?1 ORDER BY s.date DESC LIMIT 1),
             (SELECT s.amount_minor FROM balance_snapshots s
+              WHERE s.line_id = l.id AND s.date <= ?1 ORDER BY s.date DESC LIMIT 1),
+            (SELECT s.is_draft FROM balance_snapshots s
               WHERE s.line_id = l.id AND s.date <= ?1 ORDER BY s.date DESC LIMIT 1)
          FROM balance_lines l
          LEFT JOIN owners o ON o.id = l.owner_id
@@ -534,6 +539,7 @@ pub fn current_balances(
             date: r.get(7)?,
             amount_minor,
             amount: amount_minor.map(format_grouped),
+            is_draft: r.get::<_, Option<i64>>(9)?.unwrap_or(0) != 0,
         })
     })?;
     let mut out = rows.collect::<std::result::Result<Vec<_>, _>>()?;
@@ -611,6 +617,87 @@ pub fn current_balances(
         rates: rates_used,
         missing_rates: missing,
     })
+}
+
+// ---------------------------------------------------------------- перенос остатков (черновики)
+
+#[derive(Serialize)]
+pub struct CopyResult {
+    pub created: usize,
+    pub skipped_existing: usize,
+    pub skipped_closed: usize,
+    pub skipped_empty: usize,
+}
+
+/// Копирует на дату `target` последнюю известную позицию каждого счёта (раньше этой даты) как черновик.
+/// Пропускаются: счета с позицией на эту дату, закрытые (последний остаток 0) и счета без истории.
+pub fn copy_balances_to_date(conn: &Connection, target: &str) -> Result<CopyResult> {
+    validate_date(target)?;
+    conn.execute_batch("SAVEPOINT copy_balances;")?;
+    let res = (|| -> Result<CopyResult> {
+        let mut out = CopyResult { created: 0, skipped_existing: 0, skipped_closed: 0, skipped_empty: 0 };
+        let ids = {
+            let mut st = conn.prepare("SELECT id FROM balance_lines ORDER BY id")?;
+            let rows = st.query_map([], |r| r.get::<_, i64>(0))?;
+            rows.collect::<std::result::Result<Vec<i64>, _>>()?
+        };
+        for id in ids {
+            let exists: i64 = conn.query_row(
+                "SELECT count(*) FROM balance_snapshots WHERE line_id = ?1 AND date = ?2",
+                params![id, target],
+                |r| r.get(0),
+            )?;
+            if exists > 0 {
+                out.skipped_existing += 1;
+                continue;
+            }
+            let src: Option<i64> = conn
+                .query_row(
+                    "SELECT amount_minor FROM balance_snapshots WHERE line_id = ?1 AND date < ?2 ORDER BY date DESC LIMIT 1",
+                    params![id, target],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            match src {
+                None => out.skipped_empty += 1,
+                Some(0) => out.skipped_closed += 1,
+                Some(m) => {
+                    conn.execute(
+                        "INSERT INTO balance_snapshots(line_id, date, amount_minor, is_draft) VALUES (?1, ?2, ?3, 1)",
+                        params![id, target, m],
+                    )?;
+                    out.created += 1;
+                }
+            }
+        }
+        Ok(out)
+    })();
+    match res {
+        Ok(v) => {
+            conn.execute_batch("RELEASE copy_balances;")?;
+            Ok(v)
+        }
+        Err(e) => {
+            let _ = conn.execute_batch("ROLLBACK TO copy_balances; RELEASE copy_balances;");
+            Err(e)
+        }
+    }
+}
+
+pub fn confirm_snapshot(conn: &Connection, id: i64) -> Result<()> {
+    let n = conn.execute("UPDATE balance_snapshots SET is_draft = 0 WHERE id = ?1 AND is_draft = 1", params![id])?;
+    if n == 0 { bail!("Черновик не найден (возможно, уже подтверждён)") }
+    Ok(())
+}
+
+pub fn confirm_drafts(conn: &Connection, date: &str) -> Result<usize> {
+    validate_date(date)?;
+    Ok(conn.execute("UPDATE balance_snapshots SET is_draft = 0 WHERE date = ?1 AND is_draft = 1", params![date])?)
+}
+
+pub fn discard_drafts(conn: &Connection, date: &str) -> Result<usize> {
+    validate_date(date)?;
+    Ok(conn.execute("DELETE FROM balance_snapshots WHERE date = ?1 AND is_draft = 1", params![date])?)
 }
 
 // ---------------------------------------------------------------- категории
@@ -977,6 +1064,57 @@ mod tests {
 
         let first = &current_balances(&c, "2026-11-03", Some(me), None, true, "all").unwrap().rows[0];
         assert_eq!(first.amount.as_deref(), Some("150\u{a0}000.00")); // группировка тысяч
+    }
+
+    #[test]
+    fn copy_balances_as_drafts() {
+        let c = conn();
+        let me = add_owner(&c, "Костя").unwrap();
+        let bank = add_bank(&c, "Kaspi").unwrap();
+        let a = add_line(&c, me, "KZ", "bank", Some(bank), "Gold", "KZT").unwrap();
+        let b = add_line(&c, me, "KZ", "bank", Some(bank), "Депозит", "KZT").unwrap();
+        let closed = add_line(&c, me, "KZ", "cash", None, "Старый", "USD").unwrap();
+        add_line(&c, me, "KZ", "cash", None, "Новый", "EUR").unwrap(); // без истории
+        add_snapshot(&c, a, "2026-10-01", 100_000_00).unwrap();
+        add_snapshot(&c, a, "2026-10-20", 120_000_00).unwrap();
+        add_snapshot(&c, b, "2026-10-01", 50_000_00).unwrap();
+        add_snapshot(&c, closed, "2026-09-01", 0).unwrap();
+        add_snapshot(&c, b, "2026-11-01", 55_000_00).unwrap(); // на целевую дату уже есть
+
+        let r = copy_balances_to_date(&c, "2026-11-01").unwrap();
+        assert_eq!((r.created, r.skipped_existing, r.skipped_closed, r.skipped_empty), (1, 1, 1, 1));
+
+        // скопирована последняя известная позиция (от 20 октября) как черновик
+        let list = list_snapshots(&c).unwrap();
+        let d = list.iter().find(|s| s.date == "2026-11-01" && s.line_id == a).unwrap();
+        assert!(d.is_draft);
+        assert_eq!(d.amount_minor, 120_000_00);
+        assert!(!list.iter().find(|s| s.date == "2026-11-01" && s.line_id == b).unwrap().is_draft);
+        let draft_id = d.id;
+
+        // повторное копирование ничего не создаёт
+        assert_eq!(copy_balances_to_date(&c, "2026-11-01").unwrap().created, 0);
+
+        // текущие остатки показывают черновик
+        let bal = current_balances(&c, "2026-11-01", None, None, true, "all").unwrap();
+        assert!(bal.rows.iter().any(|r| r.line_id == a && r.is_draft));
+
+        // редактирование снимает флаг черновика
+        update_snapshot(&c, draft_id, a, "2026-11-01", 125_000_00).unwrap();
+        assert!(!list_snapshots(&c).unwrap().iter().find(|s| s.id == draft_id).unwrap().is_draft);
+        assert!(confirm_snapshot(&c, draft_id).is_err()); // уже подтверждён
+
+        // подтвердить все на дату
+        let r2 = copy_balances_to_date(&c, "2026-12-01").unwrap();
+        assert_eq!(r2.created, 2); // a (125 000) и b (55 000)
+        assert_eq!(confirm_drafts(&c, "2026-12-01").unwrap(), 2);
+        assert!(list_snapshots(&c).unwrap().iter().all(|s| !s.is_draft));
+
+        // удалить все черновики на дату
+        copy_balances_to_date(&c, "2027-01-01").unwrap();
+        assert_eq!(discard_drafts(&c, "2027-01-01").unwrap(), 2);
+        assert!(confirm_snapshot(&c, 99_999).is_err());
+        assert!(copy_balances_to_date(&c, "2026-13-01").is_err());
     }
 
     #[test]

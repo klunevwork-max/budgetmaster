@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Amt, AmountInput, DeleteButton, bar, cell, cellR, formatInput, today } from "./ui";
+import { Amt, AmountInput, DRAFT_BG, DeleteButton, bar, cell, cellR, formatInput, today, whole } from "./ui";
 
 const CURRENCIES = ["KZT", "USD", "EUR", "RUB"];
 const REGIONS = [{ v: "KZ", t: "Казахстан" }, { v: "RU", t: "Россия" }];
@@ -11,10 +11,10 @@ type Line = {
   id: number; owner_id: number | null; owner: string; region: string; kind: string;
   bank_id: number | null; bank_name: string | null; name: string; currency: string; label: string;
 };
-type Snapshot = { id: number; line_id: number; line_label: string; date: string; currency: string; amount: string };
+type Snapshot = { id: number; line_id: number; line_label: string; date: string; currency: string; amount: string; is_draft: boolean };
 type LineBalance = {
   line_id: number; owner: string; region_name: string; place: string; name: string;
-  currency: string; date: string | null; amount: string | null;
+  currency: string; date: string | null; amount: string | null; is_draft: boolean;
 };
 type GroupPart = { currency: string; amount: string };
 type GroupTotal = { label: string; parts: GroupPart[]; kzt: string | null };
@@ -79,7 +79,7 @@ export function CurrentTab({ hide }: { hide: boolean }) {
   return (
     <div>
       <h3>Актуальные балансы</h3>
-      <p><small>Последняя известная позиция по каждому счёту на выбранную дату. Дата старше 31 дня подсвечивается.</small></p>
+      <p><small>Последняя известная позиция по каждому счёту на выбранную дату. Дата старше 31 дня подсвечивается. Жёлтым выделены черновики: перенесённые, но не подтверждённые остатки.</small></p>
       {msg && <p style={{ color: "#b00" }}>{msg}</p>}
       <div style={bar}>
         <label>На дату: <input type="date" value={asOf} onChange={(e) => setAsOf(e.target.value)} /></label>
@@ -111,7 +111,7 @@ export function CurrentTab({ hide }: { hide: boolean }) {
                 <td style={cell}>{r.place}</td>
                 <td style={cell}>{r.name}</td>
                 <td style={cell}>{r.currency}</td>
-                <td style={cellR}>{r.amount === null ? "—" : <Amt a={r.amount} hide={hide} />}</td>
+                <td style={{ ...cellR, background: r.is_draft ? DRAFT_BG : undefined }} title={r.is_draft ? "Черновик: не подтверждён" : undefined}>{r.amount === null ? "—" : <Amt a={r.amount} hide={hide} />}</td>
                 <td style={{ ...cell, color: stale ? "#b60" : undefined }}>{r.date ?? "нет данных"}{stale ? " (давно)" : ""}</td>
               </tr>
             );
@@ -176,6 +176,8 @@ export function CurrentTab({ hide }: { hide: boolean }) {
 
 /* ---------------- Ввод позиций ---------------- */
 
+type CopyResult = { created: number; skipped_existing: number; skipped_closed: number; skipped_empty: number };
+
 export function Snapshots({ hide }: { hide: boolean }) {
   const [lines, setLines] = useState<Line[]>([]);
   const [rows, setRows] = useState<Snapshot[]>([]);
@@ -184,6 +186,8 @@ export function Snapshots({ hide }: { hide: boolean }) {
   const [amount, setAmount] = useState("");
   const [filterLine, setFilterLine] = useState("");
   const [editId, setEditId] = useState<number | null>(null);
+  const [copyDate, setCopyDate] = useState(today());
+  const [info, setInfo] = useState("");
   const [msg, setMsg] = useState("");
 
   const load = useCallback(async () => {
@@ -194,25 +198,35 @@ export function Snapshots({ hide }: { hide: boolean }) {
   }, []);
   useEffect(() => { load().catch((e) => setMsg(String(e))); }, [load]);
 
-  async function save() {
+  async function act(fn: () => Promise<unknown>) {
     setMsg("");
-    try {
+    try { await fn(); await load(); } catch (e) { setMsg(String(e)); }
+  }
+
+  async function save() {
+    await act(async () => {
       const args = { lineId: Number(lineId), date, amount };
       if (editId === null) await invoke("add_snapshot", args);
       else await invoke("update_snapshot", { id: editId, ...args });
       setEditId(null);
       setAmount("");
+    });
+  }
+
+  async function copy() {
+    setMsg("");
+    setInfo("");
+    try {
+      const r = await invoke<CopyResult>("copy_balances", { date: copyDate });
+      setInfo(
+        `Создано черновиков: ${r.created}. Пропущено: уже есть позиция — ${r.skipped_existing}, закрытые (0) — ${r.skipped_closed}, без истории — ${r.skipped_empty}.`,
+      );
       await load();
     } catch (e) { setMsg(String(e)); }
   }
 
-  async function remove(id: number) {
-    setMsg("");
-    try { await invoke("delete_snapshot", { id }); await load(); }
-    catch (e) { setMsg(String(e)); }
-  }
-
   const shown = filterLine ? rows.filter((r) => String(r.line_id) === filterLine) : rows;
+  const draftDates = Array.from(new Set(rows.filter((r) => r.is_draft).map((r) => r.date))).sort().reverse();
 
   return (
     <div>
@@ -232,6 +246,25 @@ export function Snapshots({ hide }: { hide: boolean }) {
           {editId !== null && <button onClick={() => { setEditId(null); setAmount(""); }}>Отмена</button>}
         </div>
       )}
+
+      <div style={bar}>
+        <b>Перенос остатков:</b>
+        <input type="date" value={copyDate} onChange={(e) => setCopyDate(e.target.value)} />
+        <button onClick={copy}>Скопировать балансы на дату</button>
+        <small>
+          Копируется последняя известная позиция каждого счёта (закрытые, с нулём, пропускаются).
+          Копии — жёлтые черновики: измените сумму или подтвердите. В отчёт черновики не входят.
+        </small>
+      </div>
+      {info && <p><small>{info}</small></p>}
+      {draftDates.map((d) => (
+        <div key={d} style={{ ...bar, background: DRAFT_BG, padding: "6px 10px", borderRadius: 6 }}>
+          <span>Черновики на {d}: {rows.filter((r) => r.is_draft && r.date === d).length}</span>
+          <button onClick={() => act(() => invoke("confirm_drafts", { date: d }))}>Подтвердить все</button>
+          <DeleteButton text="Удалить черновики" onConfirm={() => { void act(() => invoke("discard_drafts", { date: d })); }} />
+        </div>
+      ))}
+
       <div style={bar}>
         <b>Фильтр:</b>
         <select value={filterLine} onChange={(e) => setFilterLine(e.target.value)}>
@@ -248,11 +281,14 @@ export function Snapshots({ hide }: { hide: boolean }) {
             <tr key={r.id}>
               <td style={cell}>{r.date}</td>
               <td style={cell}>{r.line_label}</td>
-              <td style={cellR}><Amt a={r.amount} hide={hide} /></td>
+              <td style={{ ...cellR, background: r.is_draft ? DRAFT_BG : undefined }} title={r.is_draft ? "Черновик: не подтверждён" : undefined}>
+                <Amt a={r.amount} hide={hide} />
+              </td>
               <td style={cell}>{r.currency}</td>
               <td style={cell}>
-                <button onClick={() => { setEditId(r.id); setLineId(String(r.line_id)); setDate(r.date); setAmount(formatInput(r.amount)); }}>Изменить</button>{" "}
-                <DeleteButton onConfirm={() => remove(r.id)} />
+                {r.is_draft && <><button onClick={() => act(() => invoke("confirm_snapshot", { id: r.id }))}>Подтвердить</button>{" "}</>}
+                <button onClick={() => { setEditId(r.id); setLineId(String(r.line_id)); setDate(r.date); setAmount(formatInput(whole(r.amount))); }}>Изменить</button>{" "}
+                <DeleteButton onConfirm={() => { void act(() => invoke("delete_snapshot", { id: r.id })); }} />
               </td>
             </tr>
           ))}

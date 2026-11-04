@@ -8,11 +8,16 @@ type AccountInfo = { name: string; has_password: boolean };
 
 const box = { display: "flex", flexDirection: "column" as const, gap: 8, maxWidth: 400, marginBottom: 24 };
 const page = { padding: 24, fontFamily: "system-ui, sans-serif", color: "#111", background: "#fff", minHeight: "100vh", colorScheme: "light" as const };
+const headerBar = {
+  position: "sticky" as const, top: 0, zIndex: 20, background: "#fff", height: 56, boxSizing: "border-box" as const,
+  display: "flex", justifyContent: "space-between", alignItems: "center",
+  margin: "-24px -24px 0", padding: "0 24px", borderBottom: "1px solid #ddd",
+};
 const gear = { fontSize: 18, lineHeight: 1, padding: "4px 10px", cursor: "pointer" };
 const panel = {
   position: "fixed" as const, top: 64, right: 16, width: 440, maxHeight: "80vh", overflowY: "auto" as const,
   background: "#fff", border: "1px solid #bbb", borderRadius: 8, boxShadow: "0 6px 24px rgba(0,0,0,0.25)",
-  padding: 16, zIndex: 10,
+  padding: 16, zIndex: 30,
 };
 
 function RecoveryChooser(props: {
@@ -108,7 +113,7 @@ export default function App() {
       {!user ? (
         <h2>BudgetMaster</h2>
       ) : (
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+        <div style={headerBar}>
           <h2 style={{ margin: 0 }}>BudgetMaster</h2>
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
             <span>{user}{hasPw ? "" : " (без пароля)"}</span>

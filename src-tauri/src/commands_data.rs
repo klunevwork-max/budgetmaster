@@ -197,3 +197,24 @@ pub async fn update_operation(
 pub async fn delete_operation(state: State<'_, AppState>, id: i64) -> Result<(), String> {
     with_conn(&state, |c| data::delete_operation(c, id))
 }
+
+// ---- перенос остатков (черновики)
+#[tauri::command]
+pub async fn copy_balances(state: State<'_, AppState>, date: String) -> Result<data::CopyResult, String> {
+    with_conn(&state, |c| data::copy_balances_to_date(c, &date))
+}
+
+#[tauri::command]
+pub async fn confirm_snapshot(state: State<'_, AppState>, id: i64) -> Result<(), String> {
+    with_conn(&state, |c| data::confirm_snapshot(c, id))
+}
+
+#[tauri::command]
+pub async fn confirm_drafts(state: State<'_, AppState>, date: String) -> Result<usize, String> {
+    with_conn(&state, |c| data::confirm_drafts(c, &date))
+}
+
+#[tauri::command]
+pub async fn discard_drafts(state: State<'_, AppState>, date: String) -> Result<usize, String> {
+    with_conn(&state, |c| data::discard_drafts(c, &date))
+}
