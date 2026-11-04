@@ -16,19 +16,98 @@ fn opt(s: Option<String>) -> Option<String> {
     s.filter(|x| !x.trim().is_empty())
 }
 
+// ---- владельцы
+#[tauri::command]
+pub async fn list_owners(state: State<'_, AppState>) -> Result<Vec<data::Owner>, String> {
+    with_conn(&state, |c| data::list_owners(c))
+}
+
+#[tauri::command]
+pub async fn add_owner(state: State<'_, AppState>, name: String) -> Result<i64, String> {
+    with_conn(&state, |c| data::add_owner(c, &name))
+}
+
+#[tauri::command]
+pub async fn rename_owner(state: State<'_, AppState>, id: i64, name: String) -> Result<(), String> {
+    with_conn(&state, |c| data::rename_owner(c, id, &name))
+}
+
+#[tauri::command]
+pub async fn delete_owner(state: State<'_, AppState>, id: i64) -> Result<(), String> {
+    with_conn(&state, |c| data::delete_owner(c, id))
+}
+
+// ---- банки
+#[tauri::command]
+pub async fn list_banks(state: State<'_, AppState>) -> Result<Vec<data::Bank>, String> {
+    with_conn(&state, |c| data::list_banks(c))
+}
+
+#[tauri::command]
+pub async fn add_bank(state: State<'_, AppState>, name: String) -> Result<i64, String> {
+    with_conn(&state, |c| data::add_bank(c, &name))
+}
+
+#[tauri::command]
+pub async fn rename_bank(state: State<'_, AppState>, id: i64, name: String) -> Result<(), String> {
+    with_conn(&state, |c| data::rename_bank(c, id, &name))
+}
+
+#[tauri::command]
+pub async fn delete_bank(state: State<'_, AppState>, id: i64) -> Result<(), String> {
+    with_conn(&state, |c| data::delete_bank(c, id))
+}
+
+// ---- счета
+#[tauri::command]
+pub async fn list_lines(state: State<'_, AppState>) -> Result<Vec<data::Line>, String> {
+    with_conn(&state, |c| data::list_lines(c))
+}
+
+#[tauri::command]
+pub async fn add_line(
+    state: State<'_, AppState>,
+    owner_id: i64,
+    region: String,
+    kind: String,
+    bank_id: Option<i64>,
+    name: String,
+    currency: String,
+) -> Result<i64, String> {
+    with_conn(&state, |c| data::add_line(c, owner_id, &region, &kind, bank_id, &name, &currency))
+}
+
+#[tauri::command]
+pub async fn update_line(
+    state: State<'_, AppState>,
+    id: i64,
+    owner_id: i64,
+    region: String,
+    bank_id: Option<i64>,
+    name: String,
+) -> Result<(), String> {
+    with_conn(&state, |c| data::update_line(c, id, owner_id, &region, bank_id, &name))
+}
+
+#[tauri::command]
+pub async fn delete_line(state: State<'_, AppState>, id: i64) -> Result<(), String> {
+    with_conn(&state, |c| data::delete_line(c, id))
+}
+
+// ---- позиции баланса и актуальные остатки
 #[tauri::command]
 pub async fn list_snapshots(state: State<'_, AppState>) -> Result<Vec<data::Snapshot>, String> {
     with_conn(&state, |c| data::list_snapshots(c))
 }
 
 #[tauri::command]
-pub async fn add_snapshot(state: State<'_, AppState>, date: String, currency: String, amount: String) -> Result<i64, String> {
-    with_conn(&state, |c| data::add_snapshot(c, &date, &currency, money::parse_amount(&amount)?))
+pub async fn add_snapshot(state: State<'_, AppState>, line_id: i64, date: String, amount: String) -> Result<i64, String> {
+    with_conn(&state, |c| data::add_snapshot(c, line_id, &date, money::parse_amount(&amount)?))
 }
 
 #[tauri::command]
-pub async fn update_snapshot(state: State<'_, AppState>, id: i64, date: String, currency: String, amount: String) -> Result<(), String> {
-    with_conn(&state, |c| data::update_snapshot(c, id, &date, &currency, money::parse_amount(&amount)?))
+pub async fn update_snapshot(state: State<'_, AppState>, id: i64, line_id: i64, date: String, amount: String) -> Result<(), String> {
+    with_conn(&state, |c| data::update_snapshot(c, id, line_id, &date, money::parse_amount(&amount)?))
 }
 
 #[tauri::command]
@@ -36,6 +115,19 @@ pub async fn delete_snapshot(state: State<'_, AppState>, id: i64) -> Result<(), 
     with_conn(&state, |c| data::delete_snapshot(c, id))
 }
 
+#[tauri::command]
+pub async fn current_balances(
+    state: State<'_, AppState>,
+    as_of: String,
+    owner_id: Option<i64>,
+    region: Option<String>,
+    hide_zero: bool,
+) -> Result<data::Balances, String> {
+    let region = opt(region);
+    with_conn(&state, |c| data::current_balances(c, &as_of, owner_id, region.as_deref(), hide_zero))
+}
+
+// ---- категории
 #[tauri::command]
 pub async fn list_categories(state: State<'_, AppState>) -> Result<Vec<data::Category>, String> {
     with_conn(&state, |c| data::list_categories(c))
@@ -56,6 +148,7 @@ pub async fn delete_category(state: State<'_, AppState>, id: i64) -> Result<(), 
     with_conn(&state, |c| data::delete_category(c, id))
 }
 
+// ---- операции
 #[tauri::command]
 pub async fn list_operations(
     state: State<'_, AppState>,

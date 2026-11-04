@@ -4,7 +4,7 @@ use std::path::Path;
 
 use crate::kdf::key_pragma;
 
-pub const LATEST_VERSION: i64 = 1;
+pub const LATEST_VERSION: i64 = 3;
 
 pub fn open_with_key(path: &Path, key: &[u8; 32], salt: &[u8; 16]) -> Result<Connection> {
     let conn = Connection::open(path)?;
@@ -22,6 +22,20 @@ pub fn migrate(conn: &Connection) -> Result<()> {
     }
     if v < 1 {
         let sql = format!("BEGIN;\n{SCHEMA_V1}\nPRAGMA user_version = 1;\nCOMMIT;");
+        if let Err(e) = conn.execute_batch(&sql) {
+            let _ = conn.execute_batch("ROLLBACK;");
+            return Err(e.into());
+        }
+    }
+    if v < 2 {
+        let sql = format!("BEGIN;\n{SCHEMA_V2}\nPRAGMA user_version = 2;\nCOMMIT;");
+        if let Err(e) = conn.execute_batch(&sql) {
+            let _ = conn.execute_batch("ROLLBACK;");
+            return Err(e.into());
+        }
+    }
+    if v < 3 {
+        let sql = format!("BEGIN;\n{SCHEMA_V3}\nPRAGMA user_version = 3;\nCOMMIT;");
         if let Err(e) = conn.execute_batch(&sql) {
             let _ = conn.execute_batch("ROLLBACK;");
             return Err(e.into());
@@ -97,3 +111,146 @@ CREATE TABLE debts (
     )
 );
 "#;
+
+const SCHEMA_V2: &str = r#"
+CREATE TABLE banks (
+    id   INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL
+);
+
+CREATE TABLE balance_lines (
+    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    owner    TEXT NOT NULL DEFAULT '',
+    kind     TEXT NOT NULL CHECK (kind IN ('bank','cash')),
+    bank_id  INTEGER REFERENCES banks(id) ON DELETE RESTRICT,
+    name     TEXT NOT NULL,
+    currency TEXT NOT NULL CHECK (currency IN ('KZT','USD','EUR','RUB')),
+    CHECK ((kind = 'bank' AND bank_id IS NOT NULL) OR (kind = 'cash' AND bank_id IS NULL))
+);
+
+CREATE TABLE balance_snapshots_v2 (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    line_id      INTEGER NOT NULL REFERENCES balance_lines(id) ON DELETE CASCADE,
+    date         TEXT NOT NULL CHECK (date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'),
+    amount_minor INTEGER NOT NULL,
+    created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+INSERT INTO banks(name) SELECT 'Не указан' WHERE EXISTS (SELECT 1 FROM balance_snapshots);
+
+INSERT INTO balance_lines(owner, kind, bank_id, name, currency)
+SELECT DISTINCT '', 'bank', (SELECT id FROM banks WHERE name = 'Не указан'), 'Основной ' || currency, currency
+FROM balance_snapshots;
+
+INSERT INTO balance_snapshots_v2(line_id, date, amount_minor, created_at)
+SELECT l.id, s.date, s.amount_minor, s.created_at
+FROM balance_snapshots s JOIN balance_lines l ON l.currency = s.currency;
+
+DROP TABLE balance_snapshots;
+ALTER TABLE balance_snapshots_v2 RENAME TO balance_snapshots;
+CREATE UNIQUE INDEX uq_snapshot_line_date ON balance_snapshots(line_id, date);
+CREATE INDEX idx_snapshot_date ON balance_snapshots(date);
+"#;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn v1_to_v2_keeps_data() {
+        let c = Connection::open_in_memory().unwrap();
+        c.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+        c.execute_batch(SCHEMA_V1).unwrap();
+        c.execute_batch("PRAGMA user_version = 1;").unwrap();
+        c.execute_batch(
+            "INSERT INTO balance_snapshots(date, currency, amount_minor) VALUES
+             ('2026-10-01','KZT',100), ('2026-10-02','KZT',200), ('2026-10-01','USD',-5);",
+        )
+        .unwrap();
+
+        migrate(&c).unwrap();
+
+        let v: i64 = c.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
+        assert_eq!(v, LATEST_VERSION);
+        let lines: i64 = c.query_row("SELECT count(*) FROM balance_lines", [], |r| r.get(0)).unwrap();
+        let snaps: i64 = c.query_row("SELECT count(*) FROM balance_snapshots", [], |r| r.get(0)).unwrap();
+        let sum: i64 = c.query_row("SELECT sum(amount_minor) FROM balance_snapshots", [], |r| r.get(0)).unwrap();
+        assert_eq!((lines, snaps, sum), (2, 3, 295));
+        migrate(&c).unwrap(); // повторный запуск безопасен
+    }
+
+    #[test]
+    fn fresh_db_gets_v2() {
+        let c = Connection::open_in_memory().unwrap();
+        migrate(&c).unwrap();
+        let v: i64 = c.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
+        assert_eq!(v, LATEST_VERSION);
+        let banks: i64 = c.query_row("SELECT count(*) FROM banks", [], |r| r.get(0)).unwrap();
+        assert_eq!(banks, 0);
+    }
+}
+
+const SCHEMA_V3: &str = r#"
+CREATE TABLE owners (
+    id   INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL
+);
+
+INSERT INTO owners(name) SELECT DISTINCT owner FROM balance_lines WHERE owner <> '';
+INSERT INTO owners(name)
+SELECT 'Основной'
+WHERE EXISTS (SELECT 1 FROM balance_lines WHERE owner = '')
+  AND NOT EXISTS (SELECT 1 FROM owners WHERE name = 'Основной');
+
+ALTER TABLE balance_lines ADD COLUMN owner_id INTEGER REFERENCES owners(id) ON DELETE RESTRICT;
+ALTER TABLE balance_lines ADD COLUMN region TEXT NOT NULL DEFAULT 'KZ' CHECK (region IN ('RU','KZ'));
+
+UPDATE balance_lines
+SET owner_id = (
+    SELECT id FROM owners
+    WHERE owners.name = CASE WHEN balance_lines.owner = '' THEN 'Основной' ELSE balance_lines.owner END
+);
+
+ALTER TABLE balance_lines DROP COLUMN owner;
+"#;
+
+#[cfg(test)]
+mod tests_v3 {
+    use super::*;
+
+    #[test]
+    fn v2_to_v3_owners_and_region() {
+        let c = Connection::open_in_memory().unwrap();
+        c.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+        c.execute_batch(SCHEMA_V1).unwrap();
+        c.execute_batch(SCHEMA_V2).unwrap();
+        c.execute_batch("PRAGMA user_version = 2;").unwrap();
+        c.execute_batch(
+            "INSERT INTO banks(name) VALUES ('Kaspi');
+             INSERT INTO balance_lines(owner, kind, bank_id, name, currency)
+                VALUES ('Костя','bank',1,'Gold','KZT'), ('','cash',NULL,'Кошелёк','USD');
+             INSERT INTO balance_snapshots(line_id, date, amount_minor)
+                VALUES (1,'2026-10-01',100), (2,'2026-10-01',50);",
+        )
+        .unwrap();
+
+        migrate(&c).unwrap();
+
+        let count = |sql: &str| -> i64 { c.query_row(sql, [], |r| r.get(0)).unwrap() };
+        assert_eq!(count("SELECT count(*) FROM owners"), 2);
+        assert_eq!(count("SELECT count(*) FROM balance_lines WHERE owner_id IS NULL"), 0);
+        assert_eq!(count("SELECT count(*) FROM balance_lines WHERE region = 'KZ'"), 2);
+        assert_eq!(count("SELECT count(*) FROM balance_snapshots"), 2); // позиции не потеряны
+        let second: String = c
+            .query_row(
+                "SELECT o.name FROM balance_lines l JOIN owners o ON o.id = l.owner_id WHERE l.id = 2",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(second, "Основной");
+        assert!(c.prepare("SELECT owner FROM balance_lines").is_err()); // старый столбец удалён
+        let v: i64 = c.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
+        assert_eq!(v, LATEST_VERSION);
+    }
+}

@@ -12,9 +12,11 @@ use zeroize::Zeroizing;
 
 use crate::db::{migrate, open_with_key};
 use crate::keyslot::{self, Slot};
+use crate::keystore;
 
 const BAD_PASSWORD: &str = "Неверный пароль или повреждённый профиль";
 const BAD_RECOVERY: &str = "Неверный код или ответ восстановления";
+const NO_DEVICE_KEY: &str = "Ключ этой учётки не найден в хранилище ОС (другой компьютер или переустановка). Используйте «Забыли пароль?» и код восстановления.";
 const AAD_PASSWORD: &[u8] = b"bm-keyslot-v1:password";
 const AAD_RECOVERY: &[u8] = b"bm-keyslot-v1:recovery";
 
@@ -29,11 +31,17 @@ pub struct UsersFile {
     pub accounts: Vec<AccountEntry>,
 }
 
-/// budget_userN.keys.json: мастер-ключ БД, зашифрованный паролем и (опционально) секретом восстановления.
+#[derive(Serialize)]
+pub struct AccountInfo {
+    pub name: String,
+    pub has_password: bool,
+}
+
+/// budget_userN.keys.json. password = None -> учётка без пароля (ключ в хранилище ОС).
 #[derive(Serialize, Deserialize, Clone)]
 pub struct KeysFile {
     pub version: u32,
-    pub password: Slot,
+    pub password: Option<Slot>,
     pub recovery: Option<Slot>,
 }
 
@@ -71,6 +79,14 @@ fn keys_file_name(db_file: &str) -> String {
     format!("{}.keys.json", &db_file[..db_file.len() - 3])
 }
 
+fn dev_id_for(dir: &Path, db_file: &str) -> String {
+    dir.join(db_file).to_string_lossy().to_string()
+}
+
+fn dev_id(dir: &Path, e: &AccountEntry) -> String {
+    dev_id_for(dir, &e.db_file)
+}
+
 fn atomic_write(path: &Path, data: &[u8]) -> Result<()> {
     let tmp = path.with_extension("tmp");
     {
@@ -102,8 +118,34 @@ pub fn load_users(dir: &Path) -> Result<UsersFile> {
     }
 }
 
-pub fn list_accounts(dir: &Path) -> Result<Vec<String>> {
-    Ok(load_users(dir)?.accounts.into_iter().map(|a| a.name).collect())
+fn read_keys(dir: &Path, db_file: &str) -> Result<KeysFile> {
+    let bytes = fs::read(dir.join(keys_file_name(db_file)))
+        .map_err(|_| anyhow!("Файл ключей учётки не найден"))?;
+    let keys: KeysFile =
+        serde_json::from_slice(&bytes).map_err(|_| anyhow!("Файл ключей повреждён"))?;
+    if keys.version != 1 {
+        bail!("Неподдерживаемая версия файла ключей");
+    }
+    if let Some(p) = &keys.password {
+        p.kdf.validate()?;
+    }
+    if let Some(r) = &keys.recovery {
+        r.kdf.validate()?;
+    }
+    Ok(keys)
+}
+
+pub fn list_accounts(dir: &Path) -> Result<Vec<AccountInfo>> {
+    let users = load_users(dir)?;
+    Ok(users
+        .accounts
+        .into_iter()
+        .map(|a| {
+            let has_password = validate_db_file(&a.db_file).is_ok()
+                && read_keys(dir, &a.db_file).map(|k| k.password.is_some()).unwrap_or(true);
+            AccountInfo { name: a.name, has_password }
+        })
+        .collect())
 }
 
 fn check_password(password: &str) -> Result<()> {
@@ -141,22 +183,20 @@ fn find_entry(dir: &Path, name: &str) -> Result<(AccountEntry, KeysFile)> {
         .cloned()
         .ok_or_else(|| anyhow!("Учётка не найдена"))?;
     validate_db_file(&entry.db_file)?;
-    let bytes = fs::read(dir.join(keys_file_name(&entry.db_file)))
-        .map_err(|_| anyhow!("Файл ключей учётки не найден"))?;
-    let keys: KeysFile =
-        serde_json::from_slice(&bytes).map_err(|_| anyhow!("Файл ключей повреждён"))?;
-    if keys.version != 1 {
-        bail!("Неподдерживаемая версия файла ключей");
-    }
-    keys.password.kdf.validate()?;
-    if let Some(r) = &keys.recovery {
-        r.kdf.validate()?;
-    }
+    let keys = read_keys(dir, &entry.db_file)?;
     Ok((entry, keys))
 }
 
 fn write_keys(dir: &Path, entry: &AccountEntry, keys: &KeysFile) -> Result<()> {
     atomic_write(&dir.join(keys_file_name(&entry.db_file)), &serde_json::to_vec_pretty(keys)?)
+}
+
+/// Мастер-ключ: из слота пароля или (для учётки без пароля) из хранилища ОС.
+fn get_master(dir: &Path, entry: &AccountEntry, keys: &KeysFile, password: &str) -> Result<Zeroizing<[u8; 32]>> {
+    match &keys.password {
+        Some(slot) => keyslot::unwrap(password, slot, AAD_PASSWORD).map_err(|_| anyhow!(BAD_PASSWORD)),
+        None => keystore::load(&dev_id(dir, entry))?.ok_or_else(|| anyhow!(NO_DEVICE_KEY)),
+    }
 }
 
 fn build_recovery(master: &[u8; 32], setup: RecoverySetup) -> Result<(Option<Slot>, Option<String>)> {
@@ -191,18 +231,26 @@ fn open_with_master(dir: &Path, entry: &AccountEntry, master: &[u8; 32]) -> Resu
     Ok(conn)
 }
 
-/// Возвращает соединение и (если выбран «код») код восстановления — показать пользователю один раз.
+/// password = None -> учётка без пароля (тогда восстановление обязательно).
+/// Возвращает соединение и (если выбран «код») код восстановления.
 pub fn create_account(
     dir: &Path,
     name: &str,
-    password: &str,
+    password: Option<&str>,
     setup: RecoverySetup,
 ) -> Result<(Connection, Option<String>)> {
     let name = name.trim();
     if name.is_empty() || name.chars().count() > 64 {
         bail!("Имя учётки: от 1 до 64 символов");
     }
-    check_password(password)?;
+    match password {
+        Some(p) => check_password(p)?,
+        None => {
+            if matches!(setup, RecoverySetup::None) {
+                bail!("Для учётки без пароля обязательно восстановление: код или контрольный вопрос");
+            }
+        }
+    }
     let mut users = load_users(dir)?;
     if users.accounts.iter().any(|a| a.name == name) {
         bail!("Учётка с таким именем уже существует");
@@ -213,17 +261,24 @@ pub fn create_account(
     let mut salt = [0u8; 16];
     rand::thread_rng().fill_bytes(&mut salt);
 
-    let pw_slot = keyslot::wrap(password, &master, AAD_PASSWORD, None, None)?;
+    let pw_slot = match password {
+        Some(p) => Some(keyslot::wrap(p, &master, AAD_PASSWORD, None, None)?),
+        None => None,
+    };
     let (rec_slot, code) = build_recovery(&master, setup)?;
     let keys = KeysFile { version: 1, password: pw_slot, recovery: rec_slot };
 
     let db_file = next_db_file(dir, &users);
     let db_path = dir.join(&db_file);
     let keys_path = dir.join(keys_file_name(&db_file));
+    let id = dev_id_for(dir, &db_file);
 
     let result = (|| -> Result<Connection> {
         let conn = open_with_key(&db_path, &master, &salt)?;
         migrate(&conn)?;
+        if password.is_none() {
+            keystore::store(&id, &master)?;
+        }
         atomic_write(&keys_path, &serde_json::to_vec_pretty(&keys)?)?;
         users.accounts.push(AccountEntry { name: name.to_string(), db_file: db_file.clone() });
         atomic_write(&dir.join("users.json"), &serde_json::to_vec_pretty(&users)?)?;
@@ -235,26 +290,50 @@ pub fn create_account(
             let _ = fs::remove_file(format!("{}{}", db_path.display(), ext));
         }
         let _ = fs::remove_file(&keys_path);
+        let _ = keystore::delete(&id);
     }
     result.map(|c| (c, code))
 }
 
 pub fn open_account(dir: &Path, name: &str, password: &str) -> Result<(Connection, AccountEntry)> {
     let (entry, keys) = find_entry(dir, name)?;
-    let master = keyslot::unwrap(password, &keys.password, AAD_PASSWORD)
-        .map_err(|_| anyhow!(BAD_PASSWORD))?;
+    let master = get_master(dir, &entry, &keys, password)?;
     let conn = open_with_master(dir, &entry, &master)?;
     Ok((conn, entry))
 }
 
-/// Смена пароля: перешифровывается только слот пароля. БД не затрагивается.
+/// Смена пароля. Для учётки без пароля `old` игнорируется — так пароль задаётся впервые.
 pub fn change_password(dir: &Path, name: &str, old: &str, new: &str) -> Result<()> {
     check_password(new)?;
     let (entry, mut keys) = find_entry(dir, name)?;
-    let master = keyslot::unwrap(old, &keys.password, AAD_PASSWORD)
-        .map_err(|_| anyhow!(BAD_PASSWORD))?;
-    keys.password = keyslot::wrap(new, &master, AAD_PASSWORD, None, None)?;
-    write_keys(dir, &entry, &keys)
+    let master = get_master(dir, &entry, &keys, old)?;
+    let was_device = keys.password.is_none();
+    keys.password = Some(keyslot::wrap(new, &master, AAD_PASSWORD, None, None)?);
+    write_keys(dir, &entry, &keys)?;
+    if was_device {
+        let _ = keystore::delete(&dev_id(dir, &entry));
+    }
+    Ok(())
+}
+
+/// Перевести учётку в режим «без пароля» (нужны текущий пароль и настроенное восстановление).
+pub fn remove_password(dir: &Path, name: &str, password: &str) -> Result<()> {
+    let (entry, mut keys) = find_entry(dir, name)?;
+    if keys.password.is_none() {
+        bail!("Пароль уже не задан");
+    }
+    if keys.recovery.is_none() {
+        bail!("Сначала настройте восстановление (код или вопрос): для учётки без пароля оно обязательно");
+    }
+    let master = get_master(dir, &entry, &keys, password)?;
+    let id = dev_id(dir, &entry);
+    keystore::store(&id, &master)?;
+    keys.password = None;
+    if let Err(e) = write_keys(dir, &entry, &keys) {
+        let _ = keystore::delete(&id);
+        return Err(e);
+    }
+    Ok(())
 }
 
 pub fn recovery_info(dir: &Path, name: &str) -> Result<Option<RecoveryInfo>> {
@@ -265,9 +344,12 @@ pub fn recovery_info(dir: &Path, name: &str) -> Result<Option<RecoveryInfo>> {
     }))
 }
 
-/// Восстановление: секрет (код или ответ) -> мастер-ключ -> новый пароль.
+/// Восстановление: секрет -> мастер-ключ -> новый пароль. Пустой пароль = учётка без пароля.
 pub fn recover_account(dir: &Path, name: &str, secret: &str, new_password: &str) -> Result<Connection> {
-    check_password(new_password)?;
+    let passwordless = new_password.is_empty();
+    if !passwordless {
+        check_password(new_password)?;
+    }
     let (entry, mut keys) = find_entry(dir, name)?;
     let slot = keys
         .recovery
@@ -277,18 +359,28 @@ pub fn recover_account(dir: &Path, name: &str, secret: &str, new_password: &str)
         Some("question") => keyslot::normalize_answer(secret),
         _ => keyslot::normalize_code(secret),
     };
-    let master = keyslot::unwrap(&normalized, &slot, AAD_RECOVERY)
-        .map_err(|_| anyhow!(BAD_RECOVERY))?;
-    keys.password = keyslot::wrap(new_password, &master, AAD_PASSWORD, None, None)?;
+    let master = keyslot::unwrap(&normalized, &slot, AAD_RECOVERY).map_err(|_| anyhow!(BAD_RECOVERY))?;
+    let id = dev_id(dir, &entry);
+    if passwordless {
+        keystore::store(&id, &master)?;
+        keys.password = None;
+    } else {
+        keys.password = Some(keyslot::wrap(new_password, &master, AAD_PASSWORD, None, None)?);
+    }
     write_keys(dir, &entry, &keys)?;
+    if !passwordless {
+        let _ = keystore::delete(&id);
+    }
     open_with_master(dir, &entry, &master)
 }
 
-/// Настроить или заменить восстановление (нужен текущий пароль).
+/// Настроить или заменить восстановление (для учётки с паролем нужен текущий пароль).
 pub fn set_recovery(dir: &Path, name: &str, password: &str, setup: RecoverySetup) -> Result<Option<String>> {
     let (entry, mut keys) = find_entry(dir, name)?;
-    let master = keyslot::unwrap(password, &keys.password, AAD_PASSWORD)
-        .map_err(|_| anyhow!(BAD_PASSWORD))?;
+    if keys.password.is_none() && matches!(setup, RecoverySetup::None) {
+        bail!("Для учётки без пароля восстановление обязательно");
+    }
+    let master = get_master(dir, &entry, &keys, password)?;
     let (slot, code) = build_recovery(&master, setup)?;
     keys.recovery = slot;
     write_keys(dir, &entry, &keys)?;
@@ -320,10 +412,10 @@ mod tests {
     #[test]
     fn code_flow() {
         let d = tmp();
-        let (c, code) = create_account(&d, "A", "password-1234", RecoverySetup::Code).unwrap();
+        let (c, code) = create_account(&d, "A", Some("password-1234"), RecoverySetup::Code).unwrap();
         drop(c);
         let code = code.unwrap();
-        assert!(create_account(&d, "A", "password-1234", RecoverySetup::None).is_err());
+        assert!(create_account(&d, "A", Some("password-1234"), RecoverySetup::None).is_err());
         assert!(open_account(&d, "A", "bad-password").is_err());
         change_password(&d, "A", "password-1234", "second-pass-1").unwrap();
         assert!(open_account(&d, "A", "password-1234").is_err());
@@ -339,14 +431,14 @@ mod tests {
     fn question_flow() {
         let d = tmp();
         let weak = RecoverySetup::Question { question: "Книга?".into(), answer: "short".into() };
-        assert!(create_account(&d, "B", "password-1234", weak).is_err());
+        assert!(create_account(&d, "B", Some("password-1234"), weak).is_err());
         assert!(list_accounts(&d).unwrap().is_empty());
 
         let setup = RecoverySetup::Question {
             question: "Любимая книга детства?".into(),
             answer: "Мой Ответ 12345".into(),
         };
-        drop(create_account(&d, "B", "password-1234", setup).unwrap().0);
+        drop(create_account(&d, "B", Some("password-1234"), setup).unwrap().0);
         let info = recovery_info(&d, "B").unwrap().unwrap();
         assert_eq!(info.kind, "question");
         assert_eq!(info.question.as_deref(), Some("Любимая книга детства?"));
@@ -359,7 +451,7 @@ mod tests {
     #[test]
     fn none_and_set_recovery() {
         let d = tmp();
-        drop(create_account(&d, "C", "password-1234", RecoverySetup::None).unwrap().0);
+        drop(create_account(&d, "C", Some("password-1234"), RecoverySetup::None).unwrap().0);
         assert!(recovery_info(&d, "C").unwrap().is_none());
         assert!(recover_account(&d, "C", "anything", "new-password-1").is_err());
         assert!(set_recovery(&d, "C", "wrong-password", RecoverySetup::Code).is_err());
@@ -367,5 +459,46 @@ mod tests {
         drop(recover_account(&d, "C", &code, "new-password-1").unwrap());
         assert!(open_account(&d, "C", "new-password-1").is_ok());
         let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn passwordless_flow() {
+        let d = tmp();
+        // без восстановления учётка без пароля запрещена
+        assert!(create_account(&d, "P", None, RecoverySetup::None).is_err());
+        assert!(list_accounts(&d).unwrap().is_empty());
+
+        let (c, code) = create_account(&d, "P", None, RecoverySetup::Code).unwrap();
+        drop(c);
+        let code = code.unwrap();
+        assert!(!list_accounts(&d).unwrap()[0].has_password);
+        drop(open_account(&d, "P", "").unwrap());
+
+        // задать пароль
+        change_password(&d, "P", "", "password-1234").unwrap();
+        assert!(list_accounts(&d).unwrap()[0].has_password);
+        assert!(open_account(&d, "P", "").is_err());
+        drop(open_account(&d, "P", "password-1234").unwrap());
+
+        // убрать пароль (нужен верный текущий)
+        assert!(remove_password(&d, "P", "wrong-password").is_err());
+        remove_password(&d, "P", "password-1234").unwrap();
+        assert!(!list_accounts(&d).unwrap()[0].has_password);
+        drop(open_account(&d, "P", "").unwrap());
+
+        // потеря ключа устройства: вход невозможен, восстановление работает
+        keystore::delete(&dev_id_for(&d, "budget_user1.db")).unwrap();
+        assert!(open_account(&d, "P", "").is_err());
+        drop(recover_account(&d, "P", &code, "").unwrap()); // обратно «без пароля»
+        drop(open_account(&d, "P", "").unwrap());
+        drop(recover_account(&d, "P", &code, "new-password-1").unwrap());
+        assert!(open_account(&d, "P", "new-password-1").is_ok());
+
+        // без пароля нельзя снять восстановление
+        let d2 = tmp();
+        drop(create_account(&d2, "Q", None, RecoverySetup::Code).unwrap().0);
+        assert!(set_recovery(&d2, "Q", "", RecoverySetup::None).is_err());
+        let _ = fs::remove_dir_all(&d);
+        let _ = fs::remove_dir_all(&d2);
     }
 }

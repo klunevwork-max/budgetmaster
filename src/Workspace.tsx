@@ -1,95 +1,15 @@
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { CurrentTab, LinesTab, Snapshots } from "./Balances";
+import { Amt, AmountInput, DeleteButton, bar, cell, cellR, formatInput, today } from "./ui";
 
 const CURRENCIES = ["KZT", "USD", "EUR", "RUB"];
 
-type Snapshot = { id: number; date: string; currency: string; amount: string };
 type Category = { id: number; name: string; type: string; is_interest: boolean };
 type Operation = {
   id: number; date: string; type: string; currency: string; amount: string;
   category_id: number | null; category_name: string | null; comment: string | null;
 };
-type Fmt = { fmt: (a: string) => string };
-
-const today = () => new Date().toLocaleDateString("sv-SE");
-const cell = { padding: "4px 8px", borderBottom: "1px solid #ddd", textAlign: "left" as const };
-const bar = { display: "flex", gap: 8, flexWrap: "wrap" as const, marginBottom: 12, alignItems: "center" };
-
-function DeleteButton({ onConfirm }: { onConfirm: () => void }) {
-  const [armed, setArmed] = useState(false);
-  return armed ? (
-    <>
-      <button onClick={() => { setArmed(false); onConfirm(); }}>Точно?</button>
-      <button onClick={() => setArmed(false)}>Нет</button>
-    </>
-  ) : (
-    <button onClick={() => setArmed(true)}>Удалить</button>
-  );
-}
-
-function Snapshots({ fmt }: Fmt) {
-  const [rows, setRows] = useState<Snapshot[]>([]);
-  const [date, setDate] = useState(today());
-  const [currency, setCurrency] = useState("KZT");
-  const [amount, setAmount] = useState("");
-  const [editId, setEditId] = useState<number | null>(null);
-  const [msg, setMsg] = useState("");
-
-  const load = useCallback(async () => {
-    setRows(await invoke<Snapshot[]>("list_snapshots"));
-  }, []);
-  useEffect(() => { load().catch((e) => setMsg(String(e))); }, [load]);
-
-  async function save() {
-    setMsg("");
-    try {
-      if (editId === null) await invoke("add_snapshot", { date, currency, amount });
-      else await invoke("update_snapshot", { id: editId, date, currency, amount });
-      setEditId(null);
-      setAmount("");
-      await load();
-    } catch (e) { setMsg(String(e)); }
-  }
-
-  async function remove(id: number) {
-    setMsg("");
-    try { await invoke("delete_snapshot", { id }); await load(); }
-    catch (e) { setMsg(String(e)); }
-  }
-
-  return (
-    <div>
-      <h3>Позиции баланса</h3>
-      <p><small>Позиция — баланс по валюте на конец указанной даты. Отрицательные суммы разрешены (долги).</small></p>
-      {msg && <p style={{ color: "#b00" }}>{msg}</p>}
-      <div style={bar}>
-        <input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
-        <select value={currency} onChange={(e) => setCurrency(e.target.value)}>
-          {CURRENCIES.map((c) => <option key={c}>{c}</option>)}
-        </select>
-        <input placeholder="Сумма" value={amount} onChange={(e) => setAmount(e.target.value)} />
-        <button onClick={save}>{editId === null ? "Добавить" : "Сохранить"}</button>
-        {editId !== null && <button onClick={() => { setEditId(null); setAmount(""); }}>Отмена</button>}
-      </div>
-      <table style={{ borderCollapse: "collapse" }}>
-        <thead><tr><th style={cell}>Дата</th><th style={cell}>Валюта</th><th style={cell}>Сумма</th><th style={cell}></th></tr></thead>
-        <tbody>
-          {rows.map((r) => (
-            <tr key={r.id}>
-              <td style={cell}>{r.date}</td>
-              <td style={cell}>{r.currency}</td>
-              <td style={cell}>{fmt(r.amount)}</td>
-              <td style={cell}>
-                <button onClick={() => { setEditId(r.id); setDate(r.date); setCurrency(r.currency); setAmount(r.amount); }}>Изменить</button>{" "}
-                <DeleteButton onConfirm={() => remove(r.id)} />
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
 
 function Categories() {
   const [rows, setRows] = useState<Category[]>([]);
@@ -144,7 +64,7 @@ function Categories() {
   );
 }
 
-function Operations({ fmt }: Fmt) {
+function Operations({ hide }: { hide: boolean }) {
   const [rows, setRows] = useState<Operation[]>([]);
   const [cats, setCats] = useState<Category[]>([]);
   const [fFrom, setFFrom] = useState("");
@@ -192,7 +112,7 @@ function Operations({ fmt }: Fmt) {
   return (
     <div>
       <h3>Операции</h3>
-      <p><small>Операции на баланс не влияют — они нужны для анализа движения баланса в отчёте.</small></p>
+      <p><small>Операции на баланс не влияют — они нужны для анализа движения баланса в отчёте. Расходы показаны красным.</small></p>
       {msg && <p style={{ color: "#b00" }}>{msg}</p>}
       <div style={bar}>
         <input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
@@ -203,7 +123,7 @@ function Operations({ fmt }: Fmt) {
         <select value={currency} onChange={(e) => setCurrency(e.target.value)}>
           {CURRENCIES.map((c) => <option key={c}>{c}</option>)}
         </select>
-        <input placeholder="Сумма" value={amount} onChange={(e) => setAmount(e.target.value)} />
+        <AmountInput value={amount} onChange={setAmount} />
         <select value={catId} onChange={(e) => setCatId(e.target.value)}>
           <option value="">— без категории —</option>
           {cats.filter((c) => c.type === opType).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
@@ -229,7 +149,7 @@ function Operations({ fmt }: Fmt) {
       <table style={{ borderCollapse: "collapse" }}>
         <thead>
           <tr>
-            <th style={cell}>Дата</th><th style={cell}>Сумма</th><th style={cell}>Валюта</th>
+            <th style={cell}>Дата</th><th style={cellR}>Сумма</th><th style={cell}>Валюта</th>
             <th style={cell}>Категория</th><th style={cell}>Комментарий</th><th style={cell}></th>
           </tr>
         </thead>
@@ -237,7 +157,10 @@ function Operations({ fmt }: Fmt) {
           {rows.map((o) => (
             <tr key={o.id}>
               <td style={cell}>{o.date}</td>
-              <td style={cell}>{o.type === "income" ? "+" : "−"}{fmt(o.amount)}</td>
+              <td style={cellR}>
+                <span style={{ color: !hide && o.type === "expense" ? "#c00" : undefined }}>{o.type === "income" ? "+" : "−"}</span>
+                <Amt a={o.amount} hide={hide} neg={o.type === "expense"} />
+              </td>
               <td style={cell}>{o.currency}</td>
               <td style={cell}>{o.category_name ?? "—"}</td>
               <td style={cell}>{o.comment ?? ""}</td>
@@ -245,7 +168,7 @@ function Operations({ fmt }: Fmt) {
                 <button
                   onClick={() => {
                     setEditId(o.id); setDate(o.date); setOpType(o.type); setCurrency(o.currency);
-                    setAmount(o.amount); setCatId(o.category_id ? String(o.category_id) : ""); setComment(o.comment ?? "");
+                    setAmount(formatInput(o.amount)); setCatId(o.category_id ? String(o.category_id) : ""); setComment(o.comment ?? "");
                   }}
                 >Изменить</button>{" "}
                 <DeleteButton onConfirm={() => remove(o.id)} />
@@ -258,20 +181,30 @@ function Operations({ fmt }: Fmt) {
   );
 }
 
+type Tab = "cur" | "snap" | "lines" | "ops" | "cats";
+const TABS: [Tab, string][] = [
+  ["cur", "Актуальные балансы"],
+  ["snap", "Ввод позиций"],
+  ["lines", "Счета и банки"],
+  ["ops", "Операции"],
+  ["cats", "Категории"],
+];
+
 export default function Main() {
-  const [tab, setTab] = useState<"snap" | "ops" | "cats">("snap");
+  const [tab, setTab] = useState<Tab>("cur");
   const [hide, setHide] = useState(false);
-  const fmt = (a: string) => (hide ? "••••" : a);
   return (
     <div style={{ marginBottom: 24 }}>
       <div style={bar}>
-        <button disabled={tab === "snap"} onClick={() => setTab("snap")}>Позиции баланса</button>
-        <button disabled={tab === "ops"} onClick={() => setTab("ops")}>Операции</button>
-        <button disabled={tab === "cats"} onClick={() => setTab("cats")}>Категории</button>
+        {TABS.map(([k, t]) => (
+          <button key={k} disabled={tab === k} onClick={() => setTab(k)}>{t}</button>
+        ))}
         <button onClick={() => setHide(!hide)}>{hide ? "Показать суммы" : "Скрыть суммы"}</button>
       </div>
-      {tab === "snap" && <Snapshots fmt={fmt} />}
-      {tab === "ops" && <Operations fmt={fmt} />}
+      {tab === "cur" && <CurrentTab hide={hide} />}
+      {tab === "snap" && <Snapshots hide={hide} />}
+      {tab === "lines" && <LinesTab />}
+      {tab === "ops" && <Operations hide={hide} />}
       {tab === "cats" && <Categories />}
     </div>
   );

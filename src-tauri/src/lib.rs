@@ -5,9 +5,10 @@ mod dates;
 mod db;
 mod kdf;
 mod keyslot;
+mod keystore;
 mod money;
 
-use accounts::{RecoveryInfo, RecoverySetup};
+use accounts::{AccountInfo, RecoveryInfo, RecoverySetup};
 use rusqlite::Connection;
 use std::{path::PathBuf, sync::Mutex};
 use tauri::{Manager, State};
@@ -52,25 +53,26 @@ fn current_name(state: &State<'_, AppState>) -> Result<String, String> {
 }
 
 #[tauri::command]
-async fn list_accounts(app: tauri::AppHandle) -> Result<Vec<String>, String> {
+async fn list_accounts(app: tauri::AppHandle) -> Result<Vec<AccountInfo>, String> {
     accounts::list_accounts(&data_dir(&app)?).map_err(|e| e.to_string())
 }
 
+/// password = null -> учётка без пароля (восстановление обязательно).
 #[tauri::command]
 async fn create_account(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
     name: String,
-    password: String,
+    password: Option<String>,
     recovery_kind: String,
     question: Option<String>,
     answer: Option<String>,
 ) -> Result<Option<String>, String> {
-    let password = Zeroizing::new(password);
+    let password = password.filter(|p| !p.is_empty()).map(Zeroizing::new);
     let setup = parse_setup(&recovery_kind, question, answer)?;
     let dir = data_dir(&app)?;
-    let (conn, code) =
-        accounts::create_account(&dir, &name, &password, setup).map_err(|e| e.to_string())?;
+    let (conn, code) = accounts::create_account(&dir, &name, password.as_ref().map(|p| p.as_str()), setup)
+        .map_err(|e| e.to_string())?;
     *state.session.lock().unwrap() = Some(Session { name: name.trim().to_string(), conn });
     Ok(code)
 }
@@ -101,15 +103,6 @@ async fn session_info(state: State<'_, AppState>) -> Result<Option<String>, Stri
 }
 
 #[tauri::command]
-async fn table_count(state: State<'_, AppState>) -> Result<i64, String> {
-    let g = state.session.lock().unwrap();
-    let s = g.as_ref().ok_or("Не выполнен вход")?;
-    s.conn
-        .query_row("SELECT count(*) FROM sqlite_master WHERE type='table'", [], |r| r.get(0))
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
 async fn change_password(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
@@ -123,10 +116,22 @@ async fn change_password(
 }
 
 #[tauri::command]
+async fn remove_password(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    password: String,
+) -> Result<(), String> {
+    let password = Zeroizing::new(password);
+    let name = current_name(&state)?;
+    accounts::remove_password(&data_dir(&app)?, &name, &password).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 async fn recovery_info(app: tauri::AppHandle, name: String) -> Result<Option<RecoveryInfo>, String> {
     accounts::recovery_info(&data_dir(&app)?, &name).map_err(|e| e.to_string())
 }
 
+/// new_password пустой -> учётка без пароля.
 #[tauri::command]
 async fn recover_account(
     app: tauri::AppHandle,
@@ -168,11 +173,24 @@ pub fn run() {
             login,
             logout,
             session_info,
-            table_count,
             change_password,
+            remove_password,
             recovery_info,
             recover_account,
             set_recovery,
+            commands_data::list_owners,
+            commands_data::add_owner,
+            commands_data::rename_owner,
+            commands_data::delete_owner,
+            commands_data::current_balances,
+            commands_data::list_banks,
+            commands_data::add_bank,
+            commands_data::rename_bank,
+            commands_data::delete_bank,
+            commands_data::list_lines,
+            commands_data::add_line,
+            commands_data::update_line,
+            commands_data::delete_line,
             commands_data::list_snapshots,
             commands_data::add_snapshot,
             commands_data::update_snapshot,

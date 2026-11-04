@@ -52,9 +52,25 @@ pub fn parse_amount(input: &str) -> Result<i64> {
     Ok(if neg { -total } else { total })
 }
 
+#[allow(dead_code)]
 pub fn format_minor(v: i64) -> String {
     let a = v.unsigned_abs();
     format!("{}{}.{:02}", if v < 0 { "-" } else { "" }, a / 100, a % 100)
+}
+
+/// 12300000 минорных -> "123 000.00" (неразрывный пробел между тысячами)
+pub fn format_grouped(v: i64) -> String {
+    let a = v.unsigned_abs();
+    let int = (a / 100).to_string();
+    let len = int.len();
+    let mut out = String::new();
+    for (i, ch) in int.chars().enumerate() {
+        if i > 0 && (len - i) % 3 == 0 {
+            out.push('\u{a0}');
+        }
+        out.push(ch);
+    }
+    format!("{}{}.{:02}", if v < 0 { "-" } else { "" }, out, a % 100)
 }
 
 #[cfg(test)]
@@ -76,6 +92,15 @@ mod tests {
         for bad in ["", "abc", "1.234", "1.2.3", "--5", "1e5", "99999999999999999999", "20000000000000"] {
             assert!(parse_amount(bad).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn grouped() {
+        assert_eq!(format_grouped(12_300_000), "123\u{a0}000.00");
+        assert_eq!(format_grouped(-123_456_789), "-1\u{a0}234\u{a0}567.89");
+        assert_eq!(format_grouped(99), "0.99");
+        assert_eq!(format_grouped(100_000), "1\u{a0}000.00");
+        assert_eq!(parse_amount(&format_grouped(-123_456_789)).unwrap(), -123_456_789);
     }
 
     #[test]
