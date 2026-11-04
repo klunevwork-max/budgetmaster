@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { CurrentTab, LinesTab, Snapshots } from "./Balances";
+import ReportTab from "./ReportTab";
 import { Amt, AmountInput, DeleteButton, bar, cell, cellR, formatInput, today } from "./ui";
 
 const CURRENCIES = ["KZT", "USD", "EUR", "RUB"];
@@ -181,9 +182,10 @@ function Operations({ hide }: { hide: boolean }) {
   );
 }
 
-type Tab = "cur" | "snap" | "lines" | "ops" | "cats";
+type Tab = "cur" | "rep" | "snap" | "lines" | "ops" | "cats";
 const TABS: [Tab, string][] = [
   ["cur", "Актуальные балансы"],
+  ["rep", "Отчёт"],
   ["snap", "Ввод позиций"],
   ["lines", "Счета и банки"],
   ["ops", "Операции"],
@@ -202,6 +204,7 @@ export default function Main() {
         <button onClick={() => setHide(!hide)}>{hide ? "Показать суммы" : "Скрыть суммы"}</button>
       </div>
       {tab === "cur" && <CurrentTab hide={hide} />}
+      {tab === "rep" && <ReportTab hide={hide} />}
       {tab === "snap" && <Snapshots hide={hide} />}
       {tab === "lines" && <LinesTab />}
       {tab === "ops" && <Operations hide={hide} />}

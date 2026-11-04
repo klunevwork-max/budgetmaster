@@ -17,6 +17,10 @@ pub struct RefreshReport {
 /// Ошибка по одной дате не ломает остальные.
 #[tauri::command]
 pub async fn refresh_rates(state: State<'_, AppState>, dates: Vec<String>) -> Result<RefreshReport, String> {
+    ensure_rates(&state, dates).await
+}
+
+pub async fn ensure_rates(state: &State<'_, AppState>, dates: Vec<String>) -> Result<RefreshReport, String> {
     let mut uniq = dates;
     uniq.sort();
     uniq.dedup();
