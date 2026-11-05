@@ -325,8 +325,8 @@ pub fn build(conn: &Connection, p: &Period) -> Result<Report> {
 
     // ---- блок 4: неразмеченная разница (виртуальные начисления по депозитам/кредитам пока = 0)
     let virtual_monthly: i128 = 0;
-    let unmarked_with = if ok_with && excluded == 0 { Some(scaled_str(delta_with - ops_net - virtual_monthly)?) } else { None };
-    let unmarked_no = if ok_no && excluded == 0 { Some(scaled_str(no_reval - ops_net - virtual_monthly)?) } else { None };
+    let unmarked_with = if ok_with { Some(scaled_str(delta_with - ops_net - virtual_monthly)?) } else { None };
+    let unmarked_no = if ok_no { Some(scaled_str(no_reval - ops_net - virtual_monthly)?) } else { None };
 
     Ok(Report {
         start_date: p.start.clone(),
@@ -489,4 +489,38 @@ mod tests {
         assert_eq!(r.delta_no_reval.as_deref(), Some("0.00"));
         assert!(r.warnings.iter().any(|w| w.contains("из кэша")));
     }
+}
+
+// Расчет виртуальных начислений процентов по депозитам за период отчета
+pub fn calculate_virtual_accruals(
+    conn: &Connection, 
+    start_date: &str, 
+    end_date: &str
+) -> Result<i64> {
+    let mut stmt = conn.prepare(
+        "SELECT l.amount_minor, line.interest_rate_bps 
+         FROM balance_snapshots l
+         JOIN balance_lines line ON line.id = l.line_id
+         WHERE line.is_deposit = 1 AND line.interest_rate_bps > 0 AND l.date = ?1 AND l.is_draft = 0"
+    )?;
+    
+    let start = chrono::NaiveDate::parse_from_str(start_date, "%Y-%m-%d")?;
+    let end = chrono::NaiveDate::parse_from_str(end_date, "%Y-%m-%d")?;
+    let days = (end - start).num_days().max(0) as i64;
+
+    let rows = stmt.query_map(params![start_date], |r| {
+        let amount: i64 = r.get(0)?;
+        let rate_bps: i64 = r.get(1)?;
+        Ok((amount, rate_bps))
+    })?;
+
+    let mut total_accrued: i64 = 0;
+    for row in rows {
+        let (amount, rate_bps) = row?;
+        // Формула: Сумма * (ставка / 10000) * (дни / 365)
+        let accrued = amount * rate_bps * days / (365 * 10000);
+        total_accrued += accrued;
+    }
+
+    Ok(total_accrued)
 }

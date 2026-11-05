@@ -1,3 +1,4 @@
+use crate::rates;
 use rusqlite::Connection;
 use tauri::State;
 
@@ -71,10 +72,17 @@ pub async fn add_line(
     region: String,
     kind: String,
     bank_id: Option<i64>,
-    name: String,
+    name: Option<String>,
     currency: String,
+    is_deposit: Option<bool>,
+    interest_rate_bps: Option<i64>,
+    is_tax: Option<bool>,
 ) -> Result<i64, String> {
-    with_conn(&state, |c| data::add_line(c, owner_id, &region, &kind, bank_id, &name, &currency))
+    let name_val = name.unwrap_or_default();
+    let is_dep = is_deposit.unwrap_or(false);
+    let rate = interest_rate_bps.unwrap_or(0);
+    let tax = is_tax.unwrap_or(false);
+    with_conn(&state, |c| data::add_line(c, owner_id, &region, &kind, bank_id, &name_val, &currency, is_dep, rate, tax))
 }
 
 #[tauri::command]
@@ -84,9 +92,16 @@ pub async fn update_line(
     owner_id: i64,
     region: String,
     bank_id: Option<i64>,
-    name: String,
+    name: Option<String>,
+    is_deposit: Option<bool>,
+    interest_rate_bps: Option<i64>,
+    is_tax: Option<bool>,
 ) -> Result<(), String> {
-    with_conn(&state, |c| data::update_line(c, id, owner_id, &region, bank_id, &name))
+    let name_val = name.unwrap_or_default();
+    let is_dep = is_deposit.unwrap_or(false);
+    let rate = interest_rate_bps.unwrap_or(0);
+    let tax = is_tax.unwrap_or(false);
+    with_conn(&state, |c| data::update_line(c, id, owner_id, &region, bank_id, &name_val, is_dep, rate, tax))
 }
 
 #[tauri::command]
@@ -217,4 +232,26 @@ pub async fn confirm_drafts(state: State<'_, AppState>, date: String) -> Result<
 #[tauri::command]
 pub async fn discard_drafts(state: State<'_, AppState>, date: String) -> Result<usize, String> {
     with_conn(&state, |c| data::discard_drafts(c, &date))
+}
+
+
+#[tauri::command]
+pub async fn list_exchange_rates(state: State<'_, AppState>) -> Result<Vec<data::RateRow>, String> {
+    with_conn(&state, |c| data::list_exchange_rates(c))
+}
+
+#[tauri::command]
+pub async fn fetch_latest_rates(state: State<'_, AppState>, target_date: String) -> Result<(), String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| e.to_string())?;
+    
+    let day_rates = rates::fetch_for_date(&client, &target_date)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    with_conn(&state, |c| {
+        rates::store_day(c, &target_date, &day_rates, &target_date)
+    })
 }

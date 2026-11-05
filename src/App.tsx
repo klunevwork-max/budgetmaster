@@ -136,7 +136,7 @@ export default function App() {
           {needsPw && (
             <input type="password" placeholder="Пароль" value={password} onChange={(e) => setPassword(e.target.value)} />
           )}
-          <button disabled={!name} onClick={() => run(() => invoke("login", { name, password: needsPw ? password : "" }), "Вход выполнен")}>Войти</button>
+          <button disabled={!name} onClick={() => run(() => invoke("login", { name, password: needsPw ? password : "" }), "")}>Войти</button>
           {needsPw && <button onClick={() => { setMsg(""); setView("forgot"); loadRecInfo(name); }}>Забыли пароль?</button>}
           {!needsPw && <button onClick={() => { setMsg(""); setView("forgot"); loadRecInfo(name); }}>Не открывается? Восстановить доступ</button>}
           <button onClick={() => { setMsg(""); setName(""); setView("create"); }}>Создать учётку</button>

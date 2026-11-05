@@ -116,7 +116,7 @@ function Operations({ hide }: { hide: boolean }) {
       <p><small>Операции на баланс не влияют — они нужны для анализа движения баланса в отчёте. Расходы показаны красным.</small></p>
       {msg && <p style={{ color: "#b00" }}>{msg}</p>}
       <div style={bar}>
-        <input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+        <input type="date" value={date} onChange={(e) => { setDate(e.target.value); e.target.blur(); }} />
         <select value={opType} onChange={(e) => { setOpType(e.target.value); setCatId(""); }}>
           <option value="expense">Расход</option>
           <option value="income">Доход</option>
@@ -135,8 +135,8 @@ function Operations({ hide }: { hide: boolean }) {
       </div>
       <div style={bar}>
         <b>Фильтры:</b>
-        <input type="date" value={fFrom} onChange={(e) => setFFrom(e.target.value)} />
-        <input type="date" value={fTo} onChange={(e) => setFTo(e.target.value)} />
+        <input type="date" value={fFrom} onChange={(e) => { setFFrom(e.target.value); e.target.blur(); }} />
+        <input type="date" value={fTo} onChange={(e) => { setFTo(e.target.value); e.target.blur(); }} />
         <select value={fType} onChange={(e) => setFType(e.target.value)}>
           <option value="">все типы</option>
           <option value="expense">Расходы</option>
@@ -187,7 +187,7 @@ const stickyTabs = {
   marginLeft: -24, marginRight: -24, padding: "8px 24px", borderBottom: "1px solid #ddd",
 };
 
-type Tab = "cur" | "rep" | "snap" | "lines" | "ops" | "cats";
+type Tab = "cur" | "rep" | "snap" | "lines" | "ops" | "cats" | "rates";
 const TABS: [Tab, string][] = [
   ["cur", "Актуальные балансы"],
   ["rep", "Отчёт"],
@@ -195,7 +195,101 @@ const TABS: [Tab, string][] = [
   ["lines", "Счета и банки"],
   ["ops", "Операции"],
   ["cats", "Категории"],
+  ["rates", "Курсы валют"],
 ];
+
+
+type RateRow = {
+  resolved_for_date: string;
+  currency: string;
+  rate_scaled: number;
+  source_date: string;
+  source: string;
+};
+
+function RatesTab() {
+  const [rows, setRows] = useState<RateRow[]>([]);
+  const [msg, setMsg] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [targetDate, setTargetDate] = useState(today());
+
+  const load = useCallback(async () => {
+    try {
+      setRows(await invoke<RateRow[]>("list_exchange_rates"));
+    } catch (e) {
+      setMsg(String(e));
+    }
+  }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  async function handleFetch() {
+    setMsg("");
+    setLoading(true);
+    try {
+      await invoke("fetch_latest_rates", { targetDate });
+      await load();
+    } catch (e) {
+      setMsg(String(e));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const grouped: Record<string, Record<string, number>> = {};
+  for (const r of rows) {
+    if (!grouped[r.resolved_for_date]) {
+      grouped[r.resolved_for_date] = {};
+    }
+    grouped[r.resolved_for_date][r.currency] = r.rate_scaled / 1_000_000;
+  }
+
+  const dates = Object.keys(grouped).sort().reverse();
+
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+        <h3>Курсы валют (НБРК)</h3>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <input type="date" value={targetDate} onChange={(e) => { setTargetDate(e.target.value); e.target.blur(); }} />
+          <button onClick={handleFetch} disabled={loading}>
+            {loading ? "Загрузка..." : "Скачать за дату"}
+          </button>
+        </div>
+      </div>
+      {msg && <p style={{ color: "#b00" }}>{msg}</p>}
+      <table style={{ borderCollapse: "collapse", width: "100%" }}>
+        <thead>
+          <tr>
+            <th style={cell}>Дата</th>
+            <th style={cellR}>USD</th>
+            <th style={cellR}>EUR</th>
+            <th style={cellR}>RUB</th>
+          </tr>
+        </thead>
+        <tbody>
+          {dates.map((d) => (
+            <tr key={d}>
+              <td style={cell}>{d}</td>
+              <td style={cellR}>{grouped[d]["USD"] ? grouped[d]["USD"].toFixed(2) : "—"}</td>
+              <td style={cellR}>{grouped[d]["EUR"] ? grouped[d]["EUR"].toFixed(2) : "—"}</td>
+              <td style={cellR}>{grouped[d]["RUB"] ? grouped[d]["RUB"].toFixed(2) : "—"}</td>
+            </tr>
+          ))}
+          {dates.length === 0 && (
+            <tr>
+              <td colSpan={4} style={{ ...cell, textAlign: "center", color: "#666" }}>
+                Нет сохраненных курсов. Нажмите «Скачать курсы».
+              </td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+    </div>
+  );
+}
 
 export default function Main() {
   const [tab, setTab] = useState<Tab>("cur");
@@ -214,6 +308,7 @@ export default function Main() {
       {tab === "lines" && <LinesTab />}
       {tab === "ops" && <Operations hide={hide} />}
       {tab === "cats" && <Categories />}
+      {tab === "rates" && <RatesTab />}
     </div>
   );
 }

@@ -38,13 +38,15 @@ fn db_err(e: rusqlite::Error, unique_msg: &str) -> anyhow::Error {
 #[derive(Serialize)]
 pub struct Bank {
     pub id: i64,
-    pub name: String,
+    pub name: Option<String>,
+    pub is_tax: bool,
 }
 
 #[derive(Serialize)]
 pub struct Owner {
     pub id: i64,
-    pub name: String,
+    pub name: Option<String>,
+    pub is_tax: bool,
 }
 
 fn clean_text(s: &str, what: &str) -> Result<String> {
@@ -105,7 +107,7 @@ fn dict_delete(conn: &Connection, table: &str, col: &str, id: i64, word: &str) -
 }
 
 pub fn list_banks(conn: &Connection) -> Result<Vec<Bank>> {
-    Ok(dict_list(conn, "banks")?.into_iter().map(|(id, name)| Bank { id, name }).collect())
+    Ok(dict_list(conn, "banks")?.into_iter().map(|(id, name)| Bank { id, name: Some(name), is_tax: false }).collect())
 }
 pub fn add_bank(conn: &Connection, name: &str) -> Result<i64> {
     dict_add(conn, "banks", name, "Название банка", "Такой банк уже есть в списке")
@@ -120,7 +122,7 @@ pub fn delete_bank(conn: &Connection, id: i64) -> Result<()> {
 // ---------------------------------------------------------------- владельцы
 
 pub fn list_owners(conn: &Connection) -> Result<Vec<Owner>> {
-    Ok(dict_list(conn, "owners")?.into_iter().map(|(id, name)| Owner { id, name }).collect())
+    Ok(dict_list(conn, "owners")?.into_iter().map(|(id, name)| Owner { id, name: Some(name), is_tax: false }).collect())
 }
 pub fn add_owner(conn: &Connection, name: &str) -> Result<i64> {
     dict_add(conn, "owners", name, "Имя владельца", "Такой владелец уже есть в списке")
@@ -164,24 +166,31 @@ pub struct Line {
     pub kind: String,
     pub bank_id: Option<i64>,
     pub bank_name: Option<String>,
-    pub name: String,
+    pub name: Option<String>,
+    pub is_tax: bool,
     pub currency: String,
     pub label: String,
 }
 
-fn make_label(owner: Option<&str>, region: &str, bank_name: Option<&str>, name: &str, currency: &str) -> String {
+fn make_label(owner: Option<&str>, region: &str, bank_name: Option<&str>, name: Option<&str>, currency: &str) -> String {
     let mut parts: Vec<String> = Vec::new();
     if let Some(o) = owner {
         parts.push(o.to_string());
     }
     parts.push(region_name(region).to_string());
     parts.push(bank_name.unwrap_or("Наличные").to_string());
-    format!("{} · {name} ({currency})", parts.join(" · "))
+    let prefix = parts.join(" · ");
+    if let Some(n) = name {
+        if !n.is_empty() {
+            return format!("{prefix} · {n} ({currency})");
+        }
+    }
+    format!("{prefix} ({currency})")
 }
 
 pub fn list_lines(conn: &Connection) -> Result<Vec<Line>> {
     let mut st = conn.prepare(
-        "SELECT l.id, l.owner_id, o.name, l.region, l.kind, l.bank_id, b.name, l.name, l.currency
+        "SELECT l.id, l.owner_id, o.name, l.region, l.kind, l.bank_id, b.name, l.name, l.currency, l.is_tax
          FROM balance_lines l
          LEFT JOIN owners o ON o.id = l.owner_id
          LEFT JOIN banks b ON b.id = l.bank_id
@@ -193,7 +202,7 @@ pub fn list_lines(conn: &Connection) -> Result<Vec<Line>> {
         let bank_name: Option<String> = r.get(6)?;
         let name: String = r.get(7)?;
         let currency: String = r.get(8)?;
-        let label = make_label(owner.as_deref(), &region, bank_name.as_deref(), &name, &currency);
+        let label = make_label(owner.as_deref(), &region, bank_name.as_deref(), Some(&name), &currency);
         Ok(Line {
             id: r.get(0)?,
             owner_id: r.get(1)?,
@@ -203,8 +212,9 @@ pub fn list_lines(conn: &Connection) -> Result<Vec<Line>> {
             kind: r.get(4)?,
             bank_id: r.get(5)?,
             bank_name,
-            name,
+            name: Some(name),
             currency,
+            is_tax: r.get(9)?,
             label,
         })
     })?;
@@ -258,8 +268,11 @@ pub fn add_line(
     bank_id: Option<i64>,
     name: &str,
     currency: &str,
+    is_deposit: bool,
+    interest_rate_bps: i64,
+    is_tax: bool,
 ) -> Result<i64> {
-    let name = clean_text(name, "Название строки")?;
+    let name = name.trim().to_string();
     check_owner(conn, owner_id)?;
     check_region(region)?;
     check_currency(currency)?;
@@ -268,8 +281,8 @@ pub fn add_line(
         bail!("{}", LINE_DUP);
     }
     conn.execute(
-        "INSERT INTO balance_lines(owner_id, region, kind, bank_id, name, currency) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-        params![owner_id, region, kind, bank_id, name, currency],
+        "INSERT INTO balance_lines(owner_id, region, kind, bank_id, name, currency, is_deposit, interest_rate_bps, is_tax) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        params![owner_id, region, kind, bank_id, name, currency, is_deposit, interest_rate_bps, if is_tax { 1 } else { 0 }],
     )?;
     Ok(conn.last_insert_rowid())
 }
@@ -282,8 +295,11 @@ pub fn update_line(
     region: &str,
     bank_id: Option<i64>,
     name: &str,
+    is_deposit: bool,
+    interest_rate_bps: i64,
+    is_tax: bool,
 ) -> Result<()> {
-    let name = clean_text(name, "Название строки")?;
+    let name = name.trim().to_string();
     check_owner(conn, owner_id)?;
     check_region(region)?;
     let cur: Option<(String, String)> = conn
@@ -295,8 +311,8 @@ pub fn update_line(
         bail!("{}", LINE_DUP);
     }
     conn.execute(
-        "UPDATE balance_lines SET owner_id = ?1, region = ?2, bank_id = ?3, name = ?4 WHERE id = ?5",
-        params![owner_id, region, bank_id, name, id],
+        "UPDATE balance_lines SET owner_id = ?1, region = ?2, bank_id = ?3, name = ?4, is_deposit = ?5, interest_rate_bps = ?6, is_tax = ?7 WHERE id = ?8",
+        params![owner_id, region, bank_id, name, if is_deposit { 1 } else { 0 }, interest_rate_bps, if is_tax { 1 } else { 0 }, id],
     )?;
     Ok(())
 }
@@ -341,7 +357,7 @@ pub fn list_snapshots(conn: &Connection) -> Result<Vec<Snapshot>> {
         Ok(Snapshot {
             id: r.get(0)?,
             line_id: r.get(1)?,
-            line_label: make_label(owner.as_deref(), &region, bank_name.as_deref(), &line_name, &currency),
+            line_label: make_label(owner.as_deref(), &region, bank_name.as_deref(), Some(&line_name), &currency),
             date: r.get(7)?,
             currency,
             amount_minor: m,
@@ -404,7 +420,8 @@ pub struct LineBalance {
     pub region: String,
     pub region_name: String,
     pub place: String,
-    pub name: String,
+    pub name: Option<String>,
+    pub is_tax: bool,
     pub currency: String,
     pub date: Option<String>,
     pub amount_minor: Option<i64>,
@@ -528,14 +545,15 @@ pub fn current_balances(
         let amount_minor: Option<i64> = r.get(8)?;
         Ok(LineBalance {
             line_id: r.get(0)?,
-            label: make_label(owner.as_deref(), &region, bank_name.as_deref(), &name, &currency),
+            label: make_label(owner.as_deref(), &region, bank_name.as_deref(), Some(&name), &currency),
             owner_id: r.get(1)?,
             owner: owner.unwrap_or_default(),
             region_name: region_name(&region).to_string(),
             region,
             place: bank_name.unwrap_or_else(|| "Наличные".to_string()),
-            name,
+            name: Some(name),
             currency,
+            is_tax: r.get(9)?,
             date: r.get(7)?,
             amount_minor,
             amount: amount_minor.map(format_grouped),
@@ -705,7 +723,8 @@ pub fn discard_drafts(conn: &Connection, date: &str) -> Result<usize> {
 #[derive(Serialize)]
 pub struct Category {
     pub id: i64,
-    pub name: String,
+    pub name: Option<String>,
+    pub is_tax: bool,
     #[serde(rename = "type")]
     pub kind: String,
     pub is_interest: bool,
@@ -716,7 +735,7 @@ pub fn list_categories(conn: &Connection) -> Result<Vec<Category>> {
         "SELECT id, name, type, is_interest FROM categories ORDER BY type, name COLLATE NOCASE",
     )?;
     let rows = st.query_map([], |r| {
-        Ok(Category { id: r.get(0)?, name: r.get(1)?, kind: r.get(2)?, is_interest: r.get::<_, i64>(3)? != 0 })
+        Ok(Category { id: r.get(0)?, name: r.get(1)?, kind: r.get(2)?, is_interest: r.get::<_, i64>(3)? != 0, is_tax: false })
     })?;
     Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
 }
@@ -1150,4 +1169,37 @@ mod tests {
         delete_operation(&c, op2).unwrap();
         delete_category(&c, sal).unwrap(); // теперь можно
     }
+}
+
+#[derive(serde::Serialize)]
+pub struct RateRow {
+    pub resolved_for_date: String,
+    pub currency: String,
+    pub rate_scaled: i64,
+    pub source_date: String,
+    pub source: String,
+}
+
+pub fn list_exchange_rates(conn: &Connection) -> Result<Vec<RateRow>> {
+    let mut stmt = conn.prepare(
+        "SELECT resolved_for_date, currency, rate_scaled, source_date, source 
+         FROM exchange_rates 
+         ORDER BY resolved_for_date DESC, currency ASC"
+    )?;
+    
+    let rows = stmt.query_map([], |r| {
+        Ok(RateRow {
+            resolved_for_date: r.get(0)?,
+            currency: r.get(1)?,
+            rate_scaled: r.get(2)?,
+            source_date: r.get(3)?,
+            source: r.get(4)?,
+        })
+    })?;
+
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row?);
+    }
+    Ok(out)
 }

@@ -8,8 +8,10 @@ const regionName = (v: string) => REGIONS.find((r) => r.v === v)?.t ?? v;
 
 type Item = { id: number; name: string };
 type Line = {
+  is_tax: boolean;
   id: number; owner_id: number | null; owner: string; region: string; kind: string;
   bank_id: number | null; bank_name: string | null; name: string; currency: string; label: string;
+  is_deposit: boolean; interest_rate_bps: number;
 };
 type Snapshot = { id: number; line_id: number; line_label: string; date: string; currency: string; amount: string; is_draft: boolean };
 type LineBalance = {
@@ -54,14 +56,15 @@ export function CurrentTab({ hide }: { hide: boolean }) {
     invoke<Item[]>("list_owners").then(setOwners).catch((e) => setMsg(String(e)));
   }, []);
 
-  // дозагрузка курсов НБРК на выбранную дату (если нужна и не закэширована)
   useEffect(() => {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(asOf)) return;
     let cancelled = false;
     invoke<Refresh>("refresh_rates", { dates: [asOf] })
       .then((r) => { if (!cancelled) { setRep(r); setTick((t) => t + 1); } })
       .catch((e) => { if (!cancelled) setMsg(String(e)); });
-    return () => { cancelled = true; };
+    
+
+  return () => { cancelled = true; };
   }, [asOf]);
 
   useEffect(() => {
@@ -71,10 +74,14 @@ export function CurrentTab({ hide }: { hide: boolean }) {
     })
       .then((d) => { if (!cancelled) { setData(d); setMsg(""); } })
       .catch((e) => { if (!cancelled) setMsg(String(e)); });
-    return () => { cancelled = true; };
+    
+
+  return () => { cancelled = true; };
   }, [asOf, ownerId, region, hideZero, group, tick]);
 
   const warnRates = data.rates.filter((r) => r.gap_days > 7 || r.source === "cache_prev");
+
+  
 
   return (
     <div>
@@ -82,7 +89,7 @@ export function CurrentTab({ hide }: { hide: boolean }) {
       <p><small>Последняя известная позиция по каждому счёту на выбранную дату. Дата старше 31 дня подсвечивается. Жёлтым выделены черновики: перенесённые, но не подтверждённые остатки.</small></p>
       {msg && <p style={{ color: "#b00" }}>{msg}</p>}
       <div style={bar}>
-        <label>На дату: <input type="date" value={asOf} onChange={(e) => setAsOf(e.target.value)} /></label>
+        <label>На дату: <input type="date" value={asOf} onChange={(e) => { setAsOf(e.target.value); e.target.blur(); }} /></label>
         <select value={ownerId} onChange={(e) => setOwnerId(e.target.value)}>
           <option value="">все владельцы</option>
           {owners.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
@@ -98,20 +105,22 @@ export function CurrentTab({ hide }: { hide: boolean }) {
         <thead>
           <tr>
             <th style={cell}>Владелец</th><th style={cell}>Регион</th><th style={cell}>Где лежат</th>
-            <th style={cell}>Строка</th><th style={cell}>Валюта</th><th style={cellR}>Остаток</th><th style={cell}>Актуально на</th>
+            <th style={cell}>Строка</th><th style={cellR}>Остаток</th><th style={cell}>Валюта</th><th style={cell}>Актуально на</th>
           </tr>
         </thead>
         <tbody>
           {data.rows.map((r) => {
             const stale = r.date !== null && daysBetween(asOf, r.date) > 31;
-            return (
+            
+
+  return (
               <tr key={r.line_id}>
                 <td style={cell}>{r.owner || "—"}</td>
                 <td style={cell}>{r.region_name}</td>
                 <td style={cell}>{r.place}</td>
                 <td style={cell}>{r.name}</td>
-                <td style={cell}>{r.currency}</td>
                 <td style={{ ...cellR, background: r.is_draft ? DRAFT_BG : undefined }} title={r.is_draft ? "Черновик: не подтверждён" : undefined}>{r.amount === null ? "—" : <Amt a={r.amount} hide={hide} />}</td>
+                <td style={cell}>{r.currency}</td>
                 <td style={{ ...cell, color: stale ? "#b60" : undefined }}>{r.date ?? "нет данных"}{stale ? " (давно)" : ""}</td>
               </tr>
             );
@@ -228,6 +237,8 @@ export function Snapshots({ hide }: { hide: boolean }) {
   const shown = filterLine ? rows.filter((r) => String(r.line_id) === filterLine) : rows;
   const draftDates = Array.from(new Set(rows.filter((r) => r.is_draft).map((r) => r.date))).sort().reverse();
 
+  
+
   return (
     <div>
       <h3>Ввод позиций баланса</h3>
@@ -240,7 +251,7 @@ export function Snapshots({ hide }: { hide: boolean }) {
           <select value={lineId} onChange={(e) => setLineId(e.target.value)}>
             {lines.map((l) => <option key={l.id} value={l.id}>{l.label}</option>)}
           </select>
-          <input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+          <input type="date" value={date} onChange={(e) => { setDate(e.target.value); e.target.blur(); }} />
           <AmountInput value={amount} onChange={setAmount} />
           <button onClick={save}>{editId === null ? "Добавить" : "Сохранить"}</button>
           {editId !== null && <button onClick={() => { setEditId(null); setAmount(""); }}>Отмена</button>}
@@ -249,7 +260,7 @@ export function Snapshots({ hide }: { hide: boolean }) {
 
       <div style={bar}>
         <b>Перенос остатков:</b>
-        <input type="date" value={copyDate} onChange={(e) => setCopyDate(e.target.value)} />
+        <input type="date" value={copyDate} onChange={(e) => { setCopyDate(e.target.value); e.target.blur(); }} />
         <button onClick={copy}>Скопировать балансы на дату</button>
         <small>
           Копируется последняя известная позиция каждого счёта (закрытые, с нулём, пропускаются).
@@ -307,6 +318,8 @@ function DictList(props: {
 }) {
   const [editId, setEditId] = useState<number | null>(null);
   const [editName, setEditName] = useState("");
+  
+
   return (
     <table style={{ borderCollapse: "collapse", marginBottom: 16 }}>
       <tbody>
@@ -347,6 +360,11 @@ export function LinesTab() {
   const [newBank, setNewBank] = useState("");
   const [name, setName] = useState("");
   const [currency, setCurrency] = useState("KZT");
+  
+  const [isDeposit, setIsDeposit] = useState(false);
+  const [isTax, setIsTax] = useState(false);
+  const [interestRate, setInterestRate] = useState("");
+
   const [editId, setEditId] = useState<number | null>(null);
   const [msg, setMsg] = useState("");
 
@@ -365,18 +383,52 @@ export function LinesTab() {
     catch (e) { setMsg(String(e)); return false; }
   }
 
-  function resetForm() { setEditId(null); setName(""); }
+  function resetForm() {
+    setEditId(null);
+    setName("");
+    setIsDeposit(false);
+    setIsTax(false);
+    setInterestRate("");
+  }
 
   async function saveLine() {
     await act(async () => {
       if (!ownerSel || ownerSel === "__new__") throw "Выберите владельца";
       const ownerId = Number(ownerSel);
       const bankId = kind === "bank" && bankSel && bankSel !== "__new__" ? Number(bankSel) : null;
-      if (editId === null) await invoke("add_line", { ownerId, region, kind, bankId, name, currency });
-      else await invoke("update_line", { id: editId, ownerId, region, bankId, name });
+      
+      const parsedRate = parseFloat(interestRate.replace(",", ".")) || 0;
+      const interestRateBps = Math.round(parsedRate * 100);
+
+      if (editId === null) {
+        await invoke("add_line", { 
+          ownerId, 
+          region, 
+          kind, 
+          bankId, 
+          name, 
+          currency, 
+          isDeposit, 
+          interestRateBps,
+          isTax
+        });
+      } else {
+        await invoke("update_line", { 
+          id: editId, 
+          ownerId, 
+          region, 
+          bankId, 
+          name, 
+          isDeposit, 
+          interestRateBps,
+          isTax
+        });
+      }
       resetForm();
     });
   }
+
+  
 
   return (
     <div>
@@ -428,10 +480,26 @@ export function LinesTab() {
             >Добавить банк</button>
           </>
         )}
-        <input placeholder="Название строки (Gold, Депозит, Кошелёк…)" value={name} onChange={(e) => setName(e.target.value)} style={{ minWidth: 260 }} />
+        <input placeholder="Название строки (Gold, Депозит, Кошелёк…)" value={name} onChange={(e) => setName(e.target.value)} style={{ minWidth: 200 }} />
         <select value={currency} disabled={editId !== null} onChange={(e) => setCurrency(e.target.value)}>
           {CURRENCIES.map((c) => <option key={c}>{c}</option>)}
         </select>
+
+        <label style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          <input type="checkbox" checked={isTax} onChange={(e) => setIsTax(e.target.checked)} /> Налоги
+        </label>
+        <label style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          <input type="checkbox" checked={isDeposit} onChange={(e) => setIsDeposit(e.target.checked)} /> Депозит
+        </label>
+        {isDeposit && (
+          <input 
+            placeholder="Ставка % (например, 14.5)" 
+            value={interestRate} 
+            onChange={(e) => setInterestRate(e.target.value)} 
+            style={{ width: 140 }} 
+          />
+        )}
+
         <button onClick={saveLine}>{editId === null ? "Добавить" : "Сохранить"}</button>
         {editId !== null && <button onClick={resetForm}>Отмена</button>}
       </div>
@@ -440,7 +508,7 @@ export function LinesTab() {
         <thead>
           <tr>
             <th style={cell}>Владелец</th><th style={cell}>Регион</th><th style={cell}>Где лежат</th>
-            <th style={cell}>Строка</th><th style={cell}>Валюта</th><th style={cell}></th>
+            <th style={cell}>Строка</th><th style={cell}>Валюта</th><th style={cell}>Тип / Ставка</th><th style={cell}></th>
           </tr>
         </thead>
         <tbody>
@@ -452,10 +520,21 @@ export function LinesTab() {
               <td style={cell}>{l.name}</td>
               <td style={cell}>{l.currency}</td>
               <td style={cell}>
+                {l.is_deposit ? `Депозит (${(l.interest_rate_bps / 100).toFixed(2)}%)` : "Обычный"}
+              </td>
+              <td style={cell}>
                 <button
                   onClick={() => {
-                    setEditId(l.id); setOwnerSel(l.owner_id ? String(l.owner_id) : ""); setRegion(l.region);
-                    setKind(l.kind); setBankSel(l.bank_id ? String(l.bank_id) : ""); setName(l.name); setCurrency(l.currency);
+                    setEditId(l.id); 
+                    setOwnerSel(l.owner_id ? String(l.owner_id) : ""); 
+                    setRegion(l.region);
+                    setKind(l.kind); 
+                    setBankSel(l.bank_id ? String(l.bank_id) : ""); 
+                    setName(l.name); 
+                    setCurrency(l.currency);
+                    setIsDeposit(l.is_deposit);
+                    setIsTax(l.is_tax);
+                    setInterestRate(l.is_deposit ? (l.interest_rate_bps / 100).toString() : "");
                   }}
                 >Изменить</button>{" "}
                 <DeleteButton text="Удалить со всей историей" onConfirm={() => { void act(() => invoke("delete_line", { id: l.id })); }} />

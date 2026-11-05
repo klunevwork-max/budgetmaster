@@ -193,6 +193,8 @@ pub fn run() {
             commands_data::add_bank,
             commands_data::rename_bank,
             commands_data::delete_bank,
+            commands_data::list_exchange_rates,
+            commands_data::fetch_latest_rates,
             commands_data::list_lines,
             commands_data::add_line,
             commands_data::update_line,

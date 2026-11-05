@@ -4,7 +4,7 @@ use std::path::Path;
 
 use crate::kdf::key_pragma;
 
-pub const LATEST_VERSION: i64 = 4;
+pub const LATEST_VERSION: i64 = 5;
 
 pub fn open_with_key(path: &Path, key: &[u8; 32], salt: &[u8; 16]) -> Result<Connection> {
     let conn = Connection::open(path)?;
@@ -16,6 +16,7 @@ pub fn open_with_key(path: &Path, key: &[u8; 32], salt: &[u8; 16]) -> Result<Con
 }
 
 pub fn migrate(conn: &Connection) -> Result<()> {
+    let _ = conn.execute("ALTER TABLE balance_lines ADD COLUMN is_tax INTEGER NOT NULL DEFAULT 0", []);
     let v: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
     if v > LATEST_VERSION {
         bail!("База создана более новой версией приложения");
@@ -43,6 +44,13 @@ pub fn migrate(conn: &Connection) -> Result<()> {
     }
     if v < 4 {
         let sql = format!("BEGIN;\n{SCHEMA_V4}\nPRAGMA user_version = 4;\nCOMMIT;");
+        if let Err(e) = conn.execute_batch(&sql) {
+            let _ = conn.execute_batch("ROLLBACK;");
+            return Err(e.into());
+        }
+    }
+    if v < 5 {
+        let sql = format!("BEGIN;\n{SCHEMA_V5}\nPRAGMA user_version = 5;\nCOMMIT;");
         if let Err(e) = conn.execute_batch(&sql) {
             let _ = conn.execute_batch("ROLLBACK;");
             return Err(e.into());
@@ -286,5 +294,36 @@ mod tests_v4 {
         assert!(c
             .execute("INSERT INTO balance_snapshots(line_id, date, amount_minor, is_draft) VALUES (1,'2026-10-02',5,2)", [])
             .is_err());
+    }
+}
+
+const SCHEMA_V5: &str = r#"
+ALTER TABLE balance_lines ADD COLUMN is_deposit INTEGER NOT NULL DEFAULT 0 CHECK (is_deposit IN (0,1));
+ALTER TABLE balance_lines ADD COLUMN is_tax INTEGER NOT NULL DEFAULT 0 CHECK (is_tax IN (0,1));
+ALTER TABLE balance_lines ADD COLUMN interest_rate_bps INTEGER NOT NULL DEFAULT 0;
+"#;
+
+#[cfg(test)]
+mod tests_v5 {
+    use super::*;
+
+    #[test]
+    fn deposit_columns_exist() {
+        let c = Connection::open_in_memory().unwrap();
+        migrate(&c).unwrap();
+        c.execute_batch(
+            "INSERT INTO banks(name) VALUES ('B');
+             INSERT INTO owners(name) VALUES ('O');
+             INSERT INTO balance_lines(owner_id, region, kind, bank_id, name, currency, is_deposit, interest_rate_bps) 
+             VALUES (1,'KZ','bank',1,'Dep','KZT',1,1200);",
+        )
+        .unwrap();
+        let (is_dep, rate): (i64, i64) = c.query_row(
+            "SELECT is_deposit, interest_rate_bps FROM balance_lines", 
+            [], 
+            |r| Ok((r.get(0)?, r.get(1)?))
+        ).unwrap();
+        assert_eq!(is_dep, 1);
+        assert_eq!(rate, 1200);
     }
 }
