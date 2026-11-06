@@ -1,7 +1,7 @@
 import { AccountsNewTab } from "./AccountsNewTab";
 import ReportNewTab from "./ReportNewTab";
 import { SnapshotsMatrixTab } from "./SnapshotsMatrix";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { CurrentTab, LinesTab, Snapshots } from "./Balances";
 import { BalancesNewTab } from "./BalancesNew";
@@ -300,7 +300,15 @@ function RatesTab() {
   );
 }
 
-export default function Main() {
+export default function Main({ 
+  externalSettingsOpen, 
+  setExternalSettingsOpen, 
+  authSettingsContent 
+}: { 
+  externalSettingsOpen: boolean; 
+  setExternalSettingsOpen: (v: boolean) => void;
+  authSettingsContent?: ReactNode;
+}) {
   const DEFAULT_ORDER: Tab[] = ["cur", "matrix_input", "cur_new", "rep", "rep_new", "snap", "lines", "accounts_new", "ops", "cats", "rates"];
   
   const [tabOrder, setTabOrder] = useState<Tab[]>(() => {
@@ -308,7 +316,6 @@ export default function Main() {
       const saved = localStorage.getItem("budgetmaster_tab_order");
       if (saved) {
         const parsed = JSON.parse(saved) as Tab[];
-        // Проверим, что все ключи на месте
         if (Array.isArray(parsed) && parsed.length > 0) {
           const missing = DEFAULT_ORDER.filter(t => !parsed.includes(t));
           return [...parsed, ...missing];
@@ -333,7 +340,6 @@ export default function Main() {
   const activeTabs = tabOrder.filter(t => visibleTabs[t] !== false);
   const [tab, setTab] = useState<Tab>(() => activeTabs[0] || "cur");
   const [hide, setHide] = useState(false);
-  const [configOpen, setConfigOpen] = useState(false);
 
   useEffect(() => {
     if (!activeTabs.includes(tab) && activeTabs.length > 0) {
@@ -382,41 +388,46 @@ export default function Main() {
           ))}
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          <button onClick={() => setConfigOpen(!configOpen)} style={{ padding: "6px 12px", borderRadius: 6, border: "1px solid #d1d5db", background: "#fff", cursor: "pointer" }}>
-            ⚙ Настройка вкладок
-          </button>
           <button onClick={() => setHide(!hide)} style={{ padding: "6px 12px", borderRadius: 6, border: "1px solid #d1d5db", background: "#fff", cursor: "pointer" }}>
             {hide ? "Показать суммы" : "Скрыть суммы"}
           </button>
         </div>
       </div>
 
-      {configOpen && (
+      {externalSettingsOpen && (
         <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 12, padding: 20, marginBottom: 20, boxShadow: "0 10px 15px -3px rgba(0,0,0,0.1)" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-            <h4 style={{ margin: 0, fontSize: 16 }}>Настройка видимости и порядка вкладок</h4>
-            <button onClick={() => setConfigOpen(false)} style={{ background: "none", border: "none", fontSize: 16, cursor: "pointer" }}>✕</button>
+            <h3 style={{ margin: 0, fontSize: 18 }}>Настройки</h3>
+            <button onClick={() => setExternalSettingsOpen(false)} style={{ background: "none", border: "none", fontSize: 18, cursor: "pointer" }}>✕</button>
           </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            {tabOrder.map((t, idx) => (
-              <div key={t} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 12px", background: "#f9fafb", borderRadius: 8, border: "1px solid #e5e7eb" }}>
-                <label style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer", fontWeight: 500 }}>
-                  <input
-                    type="checkbox"
-                    checked={visibleTabs[t] !== false}
-                    onChange={(e) => {
-                      const updated = { ...visibleTabs, [t]: e.target.checked };
-                      saveConfig(tabOrder, updated);
-                    }}
-                  />
-                  {ALL_TABS[t]}
-                </label>
-                <div style={{ display: "flex", gap: 4 }}>
-                  <button disabled={idx === 0} onClick={() => moveTab(idx, -1)} style={{ padding: "2px 8px", cursor: idx === 0 ? "not-allowed" : "pointer" }}>▲</button>
-                  <button disabled={idx === tabOrder.length - 1} onClick={() => moveTab(idx, 1)} style={{ padding: "2px 8px", cursor: idx === tabOrder.length - 1 ? "not-allowed" : "pointer" }}>▼</button>
+
+          {/* Настройки безопасности аккаунта и пароля */}
+          {authSettingsContent}
+
+          {/* Настройки вкладок */}
+          <div>
+            <h4 style={{ margin: "0 0 12px 0", fontSize: 16 }}>Видимость и порядок вкладок</h4>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {tabOrder.map((t, idx) => (
+                <div key={t} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 12px", background: "#f9fafb", borderRadius: 8, border: "1px solid #e5e7eb" }}>
+                  <label style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer", fontWeight: 500 }}>
+                    <input
+                      type="checkbox"
+                      checked={visibleTabs[t] !== false}
+                      onChange={(e) => {
+                        const updated = { ...visibleTabs, [t]: e.target.checked };
+                        saveConfig(tabOrder, updated);
+                      }}
+                    />
+                    {ALL_TABS[t]}
+                  </label>
+                  <div style={{ display: "flex", gap: 4 }}>
+                    <button disabled={idx === 0} onClick={() => moveTab(idx, -1)} style={{ padding: "2px 8px", cursor: idx === 0 ? "not-allowed" : "pointer" }}>▲</button>
+                    <button disabled={idx === tabOrder.length - 1} onClick={() => moveTab(idx, 1)} style={{ padding: "2px 8px", cursor: idx === tabOrder.length - 1 ? "not-allowed" : "pointer" }}>▼</button>
+                  </div>
                 </div>
-              </div>
-            ))}
+              ))}
+            </div>
           </div>
         </div>
       )}

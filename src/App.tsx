@@ -7,16 +7,14 @@ type RecInfo = { kind: string; question: string | null } | null;
 type AccountInfo = { name: string; has_password: boolean };
 
 const page = { 
-  padding: "40px 24px", 
+  padding: "20px 24px", 
   fontFamily: "system-ui, -apple-system, sans-serif", 
   color: "#111827", 
   background: "#f3f4f6", 
   minHeight: "100vh", 
   colorScheme: "light" as const,
   display: "flex",
-  flexDirection: "column" as const,
-  alignItems: "center",
-  justifyContent: "center"
+  flexDirection: "column" as const
 };
 
 const cardStyle = {
@@ -29,7 +27,8 @@ const cardStyle = {
   boxShadow: "0 10px 25px -5px rgba(0, 0, 0, 0.05), 0 8px 10px -6px rgba(0, 0, 0, 0.05)",
   display: "flex",
   flexDirection: "column" as const,
-  gap: "16px"
+  gap: "16px",
+  margin: "auto"
 };
 
 const inputStyle = {
@@ -67,14 +66,14 @@ const btnSecondary = {
 const headerBar = {
   position: "sticky" as const, top: 0, zIndex: 20, background: "#fff", height: 60, boxSizing: "border-box" as const,
   display: "flex", justifyContent: "space-between", alignItems: "center",
-  margin: "-40px -24px 24px -24px", padding: "0 24px", borderBottom: "1px solid #e5e7eb",
+  margin: "-20px -24px 20px -24px", padding: "0 24px", borderBottom: "1px solid #e5e7eb",
   boxShadow: "0 1px 2px 0 rgba(0, 0, 0, 0.05)"
 };
 
 const gear = { fontSize: 18, lineHeight: 1, padding: "6px 12px", cursor: "pointer", background: "none", border: "1px solid #d1d5db", borderRadius: "6px" };
 
 const panel = {
-  position: "fixed" as const, top: 70, right: 24, width: 440, maxHeight: "80vh", overflowY: "auto" as const,
+  position: "fixed" as const, top: 70, right: 24, width: 480, maxHeight: "85vh", overflowY: "auto" as const,
   background: "#fff", border: "1px solid #e5e7eb", borderRadius: "12px", boxShadow: "0 20px 25px -5px rgba(0, 0, 0, 0.1)",
   padding: 24, zIndex: 30,
 };
@@ -193,13 +192,13 @@ export default function App() {
   }
 
   return (
-    <div style={{ ...page, justifyContent: user ? "flex-start" : "center" }}>
+    <div style={page}>
       {user && (
         <div style={headerBar}>
-          <h2 style={{ margin: 0, fontSize: 20, fontWeight: 600, color: "#111827" }}>BudgetMaster</h2>
+          <h2 style={{ margin: 0, fontSize: 18, fontWeight: 600, color: "#111827" }}>BudgetMaster</h2>
           <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
-            <span style={{ fontSize: 14, color: "#4b5563" }}>{user}{hasPw ? "" : " (без пароля)"}</span>
-            <button title="Настройки учётки" style={gear} onClick={() => setSettingsOpen(!settingsOpen)}>⚙</button>
+            <span style={{ fontSize: 14, fontWeight: 500, color: "#374151" }}>👤 {user}{hasPw ? "" : " (без пароля)"}</span>
+            <button title="Настройки" style={gear} onClick={() => setSettingsOpen(!settingsOpen)}>⚙</button>
             <button style={{ ...btnSecondary, padding: "6px 12px" }} onClick={() => { setSettingsOpen(false); run(() => invoke("logout"), "Вы вышли"); }}>Выйти</button>
           </div>
         </div>
@@ -296,54 +295,53 @@ export default function App() {
         </div>
       )}
 
-      {user && <Workspace />}
-
-      {user && settingsOpen && (
-        <div style={panel}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-            <b style={{ fontSize: 16 }}>Учётка «{user}»</b>
-            <button onClick={() => setSettingsOpen(false)} style={{ background: "none", border: "none", fontSize: 16, cursor: "pointer" }}>✕</button>
-          </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-            {hasPw ? (
-              <>
+      {user && (
+        <Workspace 
+          externalSettingsOpen={settingsOpen} 
+          setExternalSettingsOpen={setSettingsOpen}
+          authSettingsContent={
+            <div style={{ display: "flex", flexDirection: "column", gap: 16, borderBottom: "1px solid #e5e7eb", paddingBottom: 20, marginBottom: 20 }}>
+              <h4 style={{ margin: "0 0 4px 0", fontSize: 16 }}>Учётная запись и безопасность</h4>
+              {hasPw ? (
+                <>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                    <span style={{ fontSize: 13, fontWeight: 500, color: "#374151" }}>Сменить пароль</span>
+                    <input type="password" placeholder="Текущий пароль" value={oldPw} onChange={(e) => setOldPw(e.target.value)} style={inputStyle} />
+                    <input type="password" placeholder="Новый пароль" value={newPw} onChange={(e) => setNewPw(e.target.value)} style={inputStyle} />
+                    <button style={btnSecondary} onClick={() => run(() => invoke("change_password", { oldPassword: oldPw, newPassword: newPw }), "Пароль изменён")}>Сменить пароль</button>
+                  </div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                    <span style={{ fontSize: 13, fontWeight: 500, color: "#374151" }}>Убрать пароль (вход без пароля)</span>
+                    <input type="password" placeholder="Текущий пароль" value={password} onChange={(e) => setPassword(e.target.value)} style={inputStyle} />
+                    <button style={btnSecondary} onClick={() => run(() => invoke("remove_password", { password }), "Пароль убран")}>Убрать пароль</button>
+                  </div>
+                </>
+              ) : (
                 <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                  <span style={{ fontWeight: 500, fontSize: 14 }}>Сменить пароль</span>
-                  <input type="password" placeholder="Текущий пароль" value={oldPw} onChange={(e) => setOldPw(e.target.value)} style={inputStyle} />
-                  <input type="password" placeholder="Новый пароль" value={newPw} onChange={(e) => setNewPw(e.target.value)} style={inputStyle} />
-                  <button style={btnSecondary} onClick={() => run(() => invoke("change_password", { oldPassword: oldPw, newPassword: newPw }), "Пароль изменён")}>Сменить пароль</button>
+                  <span style={{ fontSize: 13, fontWeight: 500, color: "#374151" }}>Задать пароль</span>
+                  <input type="password" placeholder="Новый пароль (≥ 8 символов)" value={newPw} onChange={(e) => setNewPw(e.target.value)} style={inputStyle} />
+                  <button style={btnSecondary} onClick={() => run(() => invoke("change_password", { oldPassword: "", newPassword: newPw }), "Пароль задан")}>Задать пароль</button>
                 </div>
-                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                  <span style={{ fontWeight: 500, fontSize: 14 }}>Убрать пароль</span>
-                  <input type="password" placeholder="Текущий пароль" value={password} onChange={(e) => setPassword(e.target.value)} style={inputStyle} />
-                  <button style={btnSecondary} onClick={() => run(() => invoke("remove_password", { password }), "Пароль убран")}>Убрать пароль</button>
-                </div>
-              </>
-            ) : (
+              )}
               <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                <span style={{ fontWeight: 500, fontSize: 14 }}>Задать пароль</span>
-                <input type="password" placeholder="Новый пароль (≥ 8 символов)" value={newPw} onChange={(e) => setNewPw(e.target.value)} style={inputStyle} />
-                <button style={btnSecondary} onClick={() => run(() => invoke("change_password", { oldPassword: "", newPassword: newPw }), "Пароль задан")}>Задать пароль</button>
+                <span style={{ fontSize: 13, fontWeight: 500, color: "#374151" }}>Настроить восстановление</span>
+                {hasPw && <input type="password" placeholder="Текущий пароль" value={password} onChange={(e) => setPassword(e.target.value)} style={inputStyle} />}
+                <RecoveryChooser allowNone={hasPw} {...{ kind, setKind, question, setQuestion, answer, setAnswer }} />
+                <button
+                  style={btnSecondary}
+                  onClick={() =>
+                    run(async () => {
+                      const code = await invoke<string | null>("set_recovery", {
+                        password: hasPw ? password : "", recoveryKind: kind, question, answer,
+                      });
+                      if (code) setCodeToShow(code);
+                    }, "Восстановление настроено")
+                  }
+                >Сохранить восстановление</button>
               </div>
-            )}
-            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              <span style={{ fontWeight: 500, fontSize: 14 }}>Восстановление</span>
-              {hasPw && <input type="password" placeholder="Текущий пароль" value={password} onChange={(e) => setPassword(e.target.value)} style={inputStyle} />}
-              <RecoveryChooser allowNone={hasPw} {...{ kind, setKind, question, setQuestion, answer, setAnswer }} />
-              <button
-                style={btnSecondary}
-                onClick={() =>
-                  run(async () => {
-                    const code = await invoke<string | null>("set_recovery", {
-                      password: hasPw ? password : "", recoveryKind: kind, question, answer,
-                    });
-                    if (code) setCodeToShow(code);
-                  }, "Восстановление настроено")
-                }
-              >Сохранить настройки восстановления</button>
             </div>
-          </div>
-        </div>
+          }
+        />
       )}
     </div>
   );
