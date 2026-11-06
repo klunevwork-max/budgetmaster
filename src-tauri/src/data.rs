@@ -528,8 +528,8 @@ pub fn current_balances(
               WHERE s.line_id = l.id AND s.date <= ?1 ORDER BY s.date DESC LIMIT 1),
             (SELECT s.amount_minor FROM balance_snapshots s
               WHERE s.line_id = l.id AND s.date <= ?1 ORDER BY s.date DESC LIMIT 1),
-            (SELECT s.is_draft FROM balance_snapshots s
-              WHERE s.line_id = l.id AND s.date <= ?1 ORDER BY s.date DESC LIMIT 1)
+            COALESCE((SELECT s.is_draft FROM balance_snapshots s
+              WHERE s.line_id = l.id AND s.date <= ?1 ORDER BY s.date DESC LIMIT 1), 0)
          FROM balance_lines l
          LEFT JOIN owners o ON o.id = l.owner_id
          LEFT JOIN banks b ON b.id = l.bank_id
