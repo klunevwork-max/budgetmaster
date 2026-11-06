@@ -8,7 +8,7 @@ type RateU = { kind: string; currency: string; rate: string; source_date: string
 type Report = {
   start_date: string; end_date: string; auto_start: boolean; currencies: Cur[];
   delta_with_reval: string | null; delta_no_reval: string | null; reval_effect: string | null;
-  ops_income: string; ops_expense: string; ops_net: string; ops_count: number; ops_excluded: number;
+  ops_income: string; ops_expense: string; deposit_real_income: string; ops_net: string; ops_count: number; ops_excluded: number;
   ops_by_currency: OpsCur[]; virtual_monthly: string;
   unmarked_with_reval: string | null; unmarked_no_reval: string | null;
   rates: RateU[]; warnings: string[];
@@ -114,7 +114,8 @@ export default function ReportTab({ hide }: { hide: boolean }) {
           <h4>3. Операции за период (в KZT)</h4>
           <table style={{ borderCollapse: "collapse", marginBottom: 8 }}>
             <tbody>
-              <tr><td style={cell}>Доходы (включая выплаченные проценты по депозитам)</td><td style={cellR}>{val(rep.ops_income)}</td></tr>
+              <tr><td style={cell}>Доходы</td><td style={cellR}>{val(rep.ops_income)}</td></tr>
+              <tr><td style={cell}>Начисления по депозитам (фактические)</td><td style={cellR}>{val(rep.deposit_real_income)}</td></tr>
               <tr><td style={cell}>Расходы</td><td style={cellR}>{val(rep.ops_expense, true)}</td></tr>
               <tr><td style={cell}><b>Нетто</b></td><td style={cellR}><b>{val(rep.ops_net)}</b></td></tr>
               <tr><td style={cell}>Виртуальные начисления (будущие проценты по депозитам)</td><td style={cellR}>{val(rep.virtual_monthly)}</td></tr>

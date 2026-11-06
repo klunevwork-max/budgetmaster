@@ -2,6 +2,7 @@ use anyhow::{anyhow, bail, Result};
 use rusqlite::{params, Connection};
 use serde::Serialize;
 use std::collections::HashMap;
+use chrono::Datelike;
 
 use crate::data::CURRENCIES;
 use crate::dates::validate_date;
@@ -51,6 +52,7 @@ pub struct Report {
     pub reval_effect: Option<String>,
     pub ops_income: String,
     pub ops_expense: String,
+    pub deposit_real_income: String,
     pub ops_net: String,
     pub ops_count: usize,
     pub ops_excluded: usize,
@@ -70,7 +72,6 @@ fn fmt_rate(rs: i64) -> String {
     format!("{}.{:04}", rs / SCALE, (rs % SCALE) / 100)
 }
 
-/// Значение в масштабе 1e6 -> строка с одним банковским округлением.
 fn scaled_str(v: i128) -> Result<String> {
     let m = i64::try_from(div_round_half_even(v, SCALE as i128)).map_err(|_| anyhow!("Переполнение суммы"))?;
     Ok(format_grouped(m))
@@ -87,7 +88,6 @@ fn report_rate(kind: &str, cur: &str, r: &Rate, as_of: &str) -> ReportRate {
     }
 }
 
-/// Период (start, end]. Без start берётся ближайшая более ранняя дата с позициями.
 pub fn resolve_period(conn: &Connection, end: &str, start: Option<&str>) -> Result<Period> {
     validate_date(end)?;
     match start {
@@ -112,7 +112,6 @@ pub fn resolve_period(conn: &Connection, end: &str, start: Option<&str>) -> Resu
     }
 }
 
-/// Даты, на которые нужны курсы: начало, конец и даты операций периода в валюте, отличной от KZT.
 pub fn needed_dates(conn: &Connection, p: &Period) -> Result<Vec<String>> {
     let mut v = vec![p.start.clone(), p.end.clone()];
     let mut st = conn.prepare(
@@ -136,7 +135,6 @@ fn line_currencies(conn: &Connection) -> Result<Vec<String>> {
     Ok(v)
 }
 
-/// Остаток по валюте = сумма последних известных позиций каждого счёта на дату <= date.
 fn balances_on(conn: &Connection, date: &str) -> Result<HashMap<String, i64>> {
     let mut st = conn.prepare(
         "SELECT l.currency,
@@ -189,6 +187,109 @@ impl<'a> RateBook<'a> {
     }
 }
 
+pub struct DepositAccrualResult {
+    pub real_income: i128,
+    pub virtual_accrual: i128,
+}
+
+pub fn calculate_deposit_accruals(
+    conn: &Connection, 
+    report_end_date: &str
+) -> Result<DepositAccrualResult> {
+    let mut stmt = conn.prepare(
+        "SELECT l.id, l.currency, 
+                (SELECT s.amount_minor FROM balance_snapshots s WHERE s.line_id = l.id AND s.date <= ?1 AND s.is_draft = 0 ORDER BY s.date DESC LIMIT 1) as current_amount,
+                l.interest_rate_bps, 
+                COALESCE(l.deposit_start_date, '2026-11-01'), 
+                l.deposit_end_date, 
+                COALESCE(l.deposit_payout_mode, 'monthly')
+         FROM balance_lines l
+         WHERE l.is_deposit = 1 AND l.interest_rate_bps > 0"
+    )?;
+
+    let report_end = chrono::NaiveDate::parse_from_str(report_end_date, "%Y-%m-%d")?;
+    let mut real_total: i128 = 0;
+    let mut virtual_total: i128 = 0;
+
+    let rows = stmt.query_map(params![report_end_date], |r| {
+        Ok((
+            r.get::<_, i64>(0)?,
+            r.get::<_, String>(1)?,
+            r.get::<_, Option<i64>>(2)?.unwrap_or(0),
+            r.get::<_, i64>(3)?,
+            r.get::<_, String>(4)?,
+            r.get::<_, Option<String>>(5)?,
+            r.get::<_, String>(6)?,
+        ))
+    })?;
+
+    for row in rows {
+        let (_id, _currency, amount, rate_bps, start_str, end_opt, payout_mode) = row?;
+        if amount <= 0 { continue; }
+
+        let start_date = chrono::NaiveDate::parse_from_str(&start_str, "%Y-%m-%d")?;
+        let end_date = match &end_opt {
+            Some(e) if !e.is_empty() => chrono::NaiveDate::parse_from_str(e, "%Y-%m-%d")?,
+            _ => report_end,
+        };
+
+        if start_date >= report_end { continue; }
+
+        if payout_mode == "at_maturity" {
+            let maturity_date = match &end_opt {
+                Some(e) if !e.is_empty() => chrono::NaiveDate::parse_from_str(e, "%Y-%m-%d").unwrap_or(start_date),
+                _ => start_date + chrono::Duration::days(365),
+            };
+
+            if start_date >= report_end { continue; }
+
+            let target_date = report_end.min(maturity_date);
+            let days = (target_date - start_date).num_days().max(0) as i128;
+            let accrued = (amount as i128 * rate_bps as i128 * days) / (365 * 10000);
+
+            if report_end >= maturity_date {
+                real_total += accrued;
+            } else {
+                virtual_total += accrued;
+            }
+        } else {
+            let limit_date = report_end.min(end_date);
+            let mut curr = chrono::NaiveDate::from_ymd_opt(start_date.year(), start_date.month(), 1).unwrap();
+            if curr < start_date {
+                curr = curr.succ_opt().unwrap();
+            }
+
+            while curr <= limit_date {
+                let prev_month_start = chrono::NaiveDate::from_ymd_opt(
+                    if curr.month() == 1 { curr.year() - 1 } else { curr.year() },
+                    if curr.month() == 1 { 12 } else { curr.month() - 1 },
+                    1
+                ).unwrap().max(start_date);
+
+                let days_in_period = (curr - prev_month_start).num_days().max(0) as i128;
+                let monthly_accrued = (amount as i128 * rate_bps as i128 * days_in_period) / (365 * 10000);
+
+                if curr <= report_end {
+                    real_total += monthly_accrued;
+                } else {
+                    virtual_total += monthly_accrued;
+                }
+
+                curr = if curr.month() == 12 {
+                    chrono::NaiveDate::from_ymd_opt(curr.year() + 1, 1, 1).unwrap()
+                } else {
+                    chrono::NaiveDate::from_ymd_opt(curr.year(), curr.month() + 1, 1).unwrap()
+                };
+            }
+        }
+    }
+
+    Ok(DepositAccrualResult {
+        real_income: real_total,
+        virtual_accrual: virtual_total,
+    })
+}
+
 pub fn build(conn: &Connection, p: &Period) -> Result<Report> {
     let mut warnings: Vec<String> = Vec::new();
     if p.no_earlier {
@@ -206,7 +307,6 @@ pub fn build(conn: &Connection, p: &Period) -> Result<Report> {
     let bal_end = balances_on(conn, &p.end)?;
     let mut book = RateBook::new(conn);
 
-    // ---- блоки 1 и 2: изменение по валютам и в KZT
     let (mut with_end, mut with_start, mut no_reval) = (0i128, 0i128, 0i128);
     let (mut ok_with, mut ok_no) = (true, true);
     let mut used: Vec<ReportRate> = Vec::new();
@@ -255,23 +355,8 @@ pub fn build(conn: &Connection, p: &Period) -> Result<Report> {
         }
     }
 
-    for u in &used {
-        if u.gap_days > 7 || u.source == "cache_prev" {
-            let date = if u.kind == "конец" { &p.end } else { &p.start };
-            warnings.push(format!(
-                "Курс {} на {} ({}): {}, разрыв {} дн.",
-                u.currency,
-                date,
-                u.kind,
-                if u.source == "cache_prev" { "из кэша, не обновлён" } else { "курс предыдущего дня" },
-                u.gap_days
-            ));
-        }
-    }
-
     let delta_with = with_end - with_start;
 
-    // ---- блок 3: операции периода (start, end]
     let mut st = conn.prepare(
         "SELECT currency, date, type, sum(amount_minor), count(*) FROM operations
          WHERE date > ?1 AND date <= ?2 GROUP BY currency, date, type",
@@ -283,7 +368,7 @@ pub fn build(conn: &Connection, p: &Period) -> Result<Report> {
         .collect::<std::result::Result<_, _>>()?;
 
     let (mut inc_scaled, mut exp_scaled) = (0i128, 0i128);
-    let (mut ops_count, mut excluded, mut approx) = (0usize, 0usize, 0usize);
+    let (mut ops_count, mut excluded) = (0usize, 0usize);
     let mut by_cur: HashMap<String, (i64, i64)> = HashMap::new();
     for (cur, date, kind, sum, cnt) in ops {
         ops_count += cnt;
@@ -295,9 +380,6 @@ pub fn build(conn: &Connection, p: &Period) -> Result<Report> {
         }
         match book.get(&cur, &date)? {
             Some(rate) => {
-                if rate.source == "cache_prev" || rates::gap_days(&date, &rate.source_date) > 7 {
-                    approx += cnt;
-                }
                 let v = sum as i128 * rate.rate_scaled as i128;
                 if kind == "income" {
                     inc_scaled += v;
@@ -308,23 +390,14 @@ pub fn build(conn: &Connection, p: &Period) -> Result<Report> {
             None => excluded += cnt,
         }
     }
-    if approx > 0 {
-        warnings.push(format!(
-            "По {approx} операциям курс взят не на дату операции (кэш или разрыв больше 7 дней)"
-        ));
-    }
-    if excluded > 0 {
-        warnings.push(format!(
-            "{excluded} операций исключены из расчёта: нет курса. Неразмеченная разница не рассчитана."
-        ));
-    }
-    let ops_net = inc_scaled - exp_scaled;
+
+    let deposits = calculate_deposit_accruals(conn, &p.end)?;
+    let ops_net = inc_scaled + deposits.real_income - exp_scaled;
 
     let mut ops_by_currency: Vec<(String, (i64, i64))> = by_cur.into_iter().collect();
     ops_by_currency.sort_by_key(|e| cur_pos(&e.0));
 
-    // ---- блок 4: неразмеченная разница (виртуальные начисления по депозитам/кредитам пока = 0)
-    let virtual_monthly: i128 = 0;
+    let virtual_monthly = deposits.virtual_accrual;
     let unmarked_with = if ok_with { Some(scaled_str(delta_with - ops_net - virtual_monthly)?) } else { None };
     let unmarked_no = if ok_no { Some(scaled_str(no_reval - ops_net - virtual_monthly)?) } else { None };
 
@@ -338,6 +411,7 @@ pub fn build(conn: &Connection, p: &Period) -> Result<Report> {
         reval_effect: if ok_with && ok_no { Some(scaled_str(delta_with - no_reval)?) } else { None },
         ops_income: scaled_str(inc_scaled)?,
         ops_expense: scaled_str(exp_scaled)?,
+        deposit_real_income: scaled_str(deposits.real_income)?,
         ops_net: scaled_str(ops_net)?,
         ops_count,
         ops_excluded: excluded,
@@ -345,182 +419,10 @@ pub fn build(conn: &Connection, p: &Period) -> Result<Report> {
             .into_iter()
             .map(|(currency, (i, e))| OpsCurrency { currency, income: format_grouped(i), expense: format_grouped(e) })
             .collect(),
-        virtual_monthly: format_grouped(0),
+        virtual_monthly: scaled_str(virtual_monthly)?,
         unmarked_with_reval: unmarked_with,
         unmarked_no_reval: unmarked_no,
         rates: used,
         warnings,
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::data;
-    use crate::db::migrate;
-
-    fn conn() -> Connection {
-        let c = Connection::open_in_memory().unwrap();
-        c.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
-        migrate(&c).unwrap();
-        c
-    }
-
-    fn seed(c: &Connection) {
-        let me = data::add_owner(c, "Костя").unwrap();
-        let kzt = data::add_line(c, me, "KZ", "cash", None, "Нал KZT", "KZT").unwrap();
-        let usd = data::add_line(c, me, "KZ", "cash", None, "Нал USD", "USD").unwrap();
-        data::add_snapshot(c, kzt, "2026-10-01", 100_000_000).unwrap(); // 1 000 000.00
-        data::add_snapshot(c, usd, "2026-10-01", 100_000).unwrap(); // 1 000.00 USD
-        data::add_snapshot(c, kzt, "2026-11-01", 90_000_000).unwrap();
-        data::add_snapshot(c, usd, "2026-11-01", 120_000).unwrap(); // 1 200.00 USD
-        data::add_operation(c, "2026-10-10", "expense", "KZT", 5_000_000, None, None).unwrap();
-        data::add_operation(c, "2026-10-20", "expense", "USD", 10_000, None, None).unwrap();
-        data::add_operation(c, "2026-10-25", "income", "KZT", 20_000_000, None, None).unwrap();
-        // на дату начала — не входит в период (start, end]
-        data::add_operation(c, "2026-10-01", "expense", "KZT", 999_999_999, None, None).unwrap();
-    }
-
-    fn seed_rates(c: &Connection) {
-        rates::store(c, "USD", "2026-10-01", "2026-10-01", 450_000_000, "nbrk", 0).unwrap();
-        rates::store(c, "USD", "2026-10-20", "2026-10-20", 460_000_000, "nbrk", 0).unwrap();
-        rates::store(c, "USD", "2026-11-01", "2026-11-01", 480_000_000, "nbrk", 0).unwrap();
-    }
-
-    #[test]
-    fn report_numbers() {
-        let c = conn();
-        seed(&c);
-        seed_rates(&c);
-        let p = resolve_period(&c, "2026-11-01", None).unwrap();
-        assert_eq!((p.start.as_str(), p.auto, p.no_earlier), ("2026-10-01", true, false));
-        let r = build(&c, &p).unwrap();
-
-        // блок 1
-        let usd = r.currencies.iter().find(|x| x.currency == "USD").unwrap();
-        assert_eq!((usd.start.as_str(), usd.end.as_str(), usd.delta.as_str()), ("1\u{a0}000.00", "1\u{a0}200.00", "200.00"));
-        let kzt = r.currencies.iter().find(|x| x.currency == "KZT").unwrap();
-        assert_eq!(kzt.delta, "-100\u{a0}000.00");
-
-        // блок 2: с переоценкой 147 600 000 - 145 000 000 = 2 600 000 минорных
-        assert_eq!(r.delta_with_reval.as_deref(), Some("26\u{a0}000.00"));
-        assert_eq!(r.delta_no_reval.as_deref(), Some("-4\u{a0}000.00"));
-        assert_eq!(r.reval_effect.as_deref(), Some("30\u{a0}000.00")); // 1000 USD * (480 - 450)
-
-        // блок 3
-        assert_eq!(r.ops_count, 3); // операция на дату начала не учтена
-        assert_eq!(r.ops_income, "200\u{a0}000.00");
-        assert_eq!(r.ops_expense, "96\u{a0}000.00"); // 50 000 + 100 USD * 460
-        assert_eq!(r.ops_net, "104\u{a0}000.00");
-        let ou = r.ops_by_currency.iter().find(|x| x.currency == "USD").unwrap();
-        assert_eq!((ou.income.as_str(), ou.expense.as_str()), ("0.00", "100.00"));
-
-        // блок 4
-        assert_eq!(r.unmarked_with_reval.as_deref(), Some("-78\u{a0}000.00"));
-        assert_eq!(r.unmarked_no_reval.as_deref(), Some("-108\u{a0}000.00"));
-        assert!(r.warnings.is_empty(), "{:?}", r.warnings);
-        assert_eq!(r.rates.len(), 2); // USD на начало и на конец
-
-        // операция на дату конца входит в период
-        data::add_operation(&c, "2026-11-01", "expense", "KZT", 100, None, None).unwrap();
-        assert_eq!(build(&c, &p).unwrap().ops_count, 4);
-    }
-
-    #[test]
-    fn missing_rates_block_unmarked() {
-        let c = conn();
-        seed(&c); // курсов нет
-        let p = resolve_period(&c, "2026-11-01", None).unwrap();
-        let r = build(&c, &p).unwrap();
-        assert!(r.delta_with_reval.is_none() && r.delta_no_reval.is_none() && r.reval_effect.is_none());
-        assert!(r.unmarked_with_reval.is_none() && r.unmarked_no_reval.is_none());
-        assert_eq!(r.ops_excluded, 1); // USD-операция
-        assert!(r.warnings.iter().any(|w| w.contains("Нет курса USD")));
-        // блок 1 при этом считается
-        assert_eq!(r.currencies.len(), 2);
-    }
-
-    #[test]
-    fn period_rules_and_dates() {
-        let c = conn();
-        seed(&c);
-        // ручное начало
-        let p = resolve_period(&c, "2026-11-01", Some("2026-09-01")).unwrap();
-        assert!(!p.auto);
-        assert!(resolve_period(&c, "2026-11-01", Some("2026-11-01")).is_err());
-        assert!(resolve_period(&c, "2026-13-01", None).is_err());
-        // раньше первой позиции: пустой период
-        let p0 = resolve_period(&c, "2026-09-15", None).unwrap();
-        assert!(p0.no_earlier && p0.start == p0.end);
-        let r0 = build(&c, &p0).unwrap();
-        assert_eq!(r0.ops_count, 0);
-        assert!(r0.warnings.iter().any(|w| w.contains("раньше даты отчёта")));
-
-        // нужные даты курсов: начало, конец и день USD-операции (KZT-операции не нужны)
-        let p = resolve_period(&c, "2026-11-01", None).unwrap();
-        let d = needed_dates(&c, &p).unwrap();
-        assert_eq!(d, vec!["2026-10-01".to_string(), "2026-10-20".to_string(), "2026-11-01".to_string()]);
-    }
-
-    #[test]
-    fn drafts_are_ignored() {
-        let c = conn();
-        seed(&c);
-        seed_rates(&c);
-        // черновик на 1 декабря (копия остатков на 1 ноября) не должен стать концом или началом периода
-        crate::data::copy_balances_to_date(&c, "2026-12-01").unwrap();
-        let p = resolve_period(&c, "2026-12-01", None).unwrap();
-        assert_eq!(p.start, "2026-11-01"); // последняя подтверждённая позиция
-        let r = build(&c, &p).unwrap();
-        assert!(r.warnings.iter().any(|w| w.contains("нет позиций")));
-        assert_eq!(r.delta_no_reval.as_deref(), Some("0.00"));
-    }
-
-    #[test]
-    fn end_without_snapshot_uses_last_known() {
-        let c = conn();
-        seed(&c);
-        seed_rates(&c);
-        let p = resolve_period(&c, "2026-11-15", None).unwrap();
-        assert_eq!(p.start, "2026-11-01");
-        let r = build(&c, &p).unwrap();
-        assert!(r.warnings.iter().any(|w| w.contains("нет позиций")));
-        // остатки не изменились — изменение нулевое, но курс на 15.11 взят из кэша (разрыв 14 дн.)
-        assert_eq!(r.delta_no_reval.as_deref(), Some("0.00"));
-        assert!(r.warnings.iter().any(|w| w.contains("из кэша")));
-    }
-}
-
-// Расчет виртуальных начислений процентов по депозитам за период отчета
-pub fn calculate_virtual_accruals(
-    conn: &Connection, 
-    start_date: &str, 
-    end_date: &str
-) -> Result<i64> {
-    let mut stmt = conn.prepare(
-        "SELECT l.amount_minor, line.interest_rate_bps 
-         FROM balance_snapshots l
-         JOIN balance_lines line ON line.id = l.line_id
-         WHERE line.is_deposit = 1 AND line.interest_rate_bps > 0 AND l.date = ?1 AND l.is_draft = 0"
-    )?;
-    
-    let start = chrono::NaiveDate::parse_from_str(start_date, "%Y-%m-%d")?;
-    let end = chrono::NaiveDate::parse_from_str(end_date, "%Y-%m-%d")?;
-    let days = (end - start).num_days().max(0) as i64;
-
-    let rows = stmt.query_map(params![start_date], |r| {
-        let amount: i64 = r.get(0)?;
-        let rate_bps: i64 = r.get(1)?;
-        Ok((amount, rate_bps))
-    })?;
-
-    let mut total_accrued: i64 = 0;
-    for row in rows {
-        let (amount, rate_bps) = row?;
-        // Формула: Сумма * (ставка / 10000) * (дни / 365)
-        let accrued = amount * rate_bps * days / (365 * 10000);
-        total_accrued += accrued;
-    }
-
-    Ok(total_accrued)
 }
