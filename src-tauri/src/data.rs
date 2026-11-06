@@ -558,7 +558,7 @@ pub fn current_balances(
             place: bank_name.unwrap_or_else(|| "Наличные".to_string()),
             name: Some(name),
             currency,
-            is_tax: r.get(9)?,
+            is_tax: r.get(10)?,
             date: r.get(7)?,
             amount_minor,
             amount: amount_minor.map(format_grouped),

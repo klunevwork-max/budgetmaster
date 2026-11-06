@@ -17,6 +17,7 @@ type Snapshot = { id: number; line_id: number; line_label: string; date: string;
 type LineBalance = {
   line_id: number; owner: string; region_name: string; place: string; name: string;
   currency: string; date: string | null; amount: string | null; is_draft: boolean;
+  is_tax: boolean;
 };
 type GroupPart = { currency: string; amount: string };
 type GroupTotal = { label: string; parts: GroupPart[]; kzt: string | null };
@@ -101,35 +102,72 @@ export function CurrentTab({ hide }: { hide: boolean }) {
         <label><input type="checkbox" checked={hideZero} onChange={(e) => setHideZero(e.target.checked)} /> скрыть нулевые (закрытые)</label>
       </div>
 
-      <table style={{ borderCollapse: "collapse", marginBottom: 16 }}>
-        <thead>
-          <tr>
-            <th style={cell}>Владелец</th><th style={cell}>Регион</th><th style={cell}>Где лежат</th>
-            <th style={cell}>Пояснение</th><th style={cellR}>Остаток</th><th style={cell}>Валюта</th><th style={cell}>Актуально на</th>
-          </tr>
-        </thead>
-        <tbody>
-          {data.rows.map((r) => {
-            const stale = r.date !== null && daysBetween(asOf, r.date) > 31;
-            
+      {(() => {
+        const regularRows = data.rows.filter((r) => !r.is_tax);
+        const taxRows = data.rows.filter((r) => r.is_tax);
 
-  return (
-              <tr key={r.line_id}>
-                <td style={cell}>{r.owner || "—"}</td>
-                <td style={cell}>{r.region_name}</td>
-                <td style={cell}>{r.place}</td>
-                <td style={cell}>{r.name}</td>
-                <td style={{ ...cellR, background: r.is_draft ? DRAFT_BG : undefined }} title={r.is_draft ? "Черновик: не подтверждён" : undefined}>{r.amount === null ? "—" : <Amt a={r.amount} hide={hide} />}</td>
-                <td style={cell}>{r.currency}</td>
-                <td style={{ ...cell, color: stale ? "#b60" : undefined }}>{r.date ?? "нет данных"}{stale ? " (давно)" : ""}</td>
-              </tr>
-            );
-          })}
-          {data.rows.length === 0 && (
-            <tr><td style={cell} colSpan={7}>Нет счетов по выбранным условиям. Добавьте их на вкладке «Счета и банки».</td></tr>
-          )}
-        </tbody>
-      </table>
+        return (
+          <>
+            <table style={{ borderCollapse: "collapse", marginBottom: 16 }}>
+              <thead>
+                <tr>
+                  <th style={cell}>Владелец</th><th style={cell}>Регион</th><th style={cell}>Где лежат</th>
+                  <th style={cell}>Пояснение</th><th style={cellR}>Остаток</th><th style={cell}>Валюта</th><th style={cell}>Актуально на</th>
+                </tr>
+              </thead>
+              <tbody>
+                {regularRows.map((r) => {
+                  const stale = r.date !== null && daysBetween(asOf, r.date) > 31;
+                  return (
+                    <tr key={r.line_id}>
+                      <td style={cell}>{r.owner || "—"}</td>
+                      <td style={cell}>{r.region_name}</td>
+                      <td style={cell}>{r.place}</td>
+                      <td style={cell}>{r.name}</td>
+                      <td style={{ ...cellR, background: r.is_draft ? DRAFT_BG : undefined }} title={r.is_draft ? "Черновик: не подтверждён" : undefined}>{r.amount === null ? "—" : <Amt a={r.amount} hide={hide} />}</td>
+                      <td style={cell}>{r.currency}</td>
+                      <td style={{ ...cell, color: stale ? "#b60" : undefined }}>{r.date ?? "нет данных"}{stale ? " (давно)" : ""}</td>
+                    </tr>
+                  );
+                })}
+                {regularRows.length === 0 && (
+                  <tr><td style={cell} colSpan={7}>Нет счетов по выбранным условиям. Добавьте их на вкладке «Счета и банки».</td></tr>
+                )}
+              </tbody>
+            </table>
+
+            {taxRows.length > 0 && (
+              <div style={{ marginTop: 24, marginBottom: 16 }}>
+                <h4 style={{ marginBottom: 8, color: "#444" }}>Налоги (отложенные до платежей)</h4>
+                <table style={{ borderCollapse: "collapse", marginBottom: 16 }}>
+                  <thead>
+                    <tr>
+                      <th style={cell}>Владелец</th><th style={cell}>Регион</th><th style={cell}>Где лежат</th>
+                      <th style={cell}>Пояснение</th><th style={cellR}>Остаток</th><th style={cell}>Валюта</th><th style={cell}>Актуально на</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {taxRows.map((r) => {
+                      const stale = r.date !== null && daysBetween(asOf, r.date) > 31;
+                      return (
+                        <tr key={r.line_id}>
+                          <td style={cell}>{r.owner || "—"}</td>
+                          <td style={cell}>{r.region_name}</td>
+                          <td style={cell}>{r.place}</td>
+                          <td style={cell}>{r.name}</td>
+                          <td style={{ ...cellR, background: r.is_draft ? DRAFT_BG : undefined }} title={r.is_draft ? "Черновик: не подтверждён" : undefined}>{r.amount === null ? "—" : <Amt a={r.amount} hide={hide} />}</td>
+                          <td style={cell}>{r.currency}</td>
+                          <td style={{ ...cell, color: stale ? "#b60" : undefined }}>{r.date ?? "нет данных"}{stale ? " (давно)" : ""}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </>
+        );
+      })()}
 
       <h4>Итого</h4>
       <div style={bar}>
