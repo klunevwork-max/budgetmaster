@@ -32,9 +32,6 @@ export function SnapshotsMatrixTab({ hide }: { hide: boolean }) {
 
   const [lines, setLines] = useState<Line[]>([]);
   const [snapshots, setSnapshots] = useState<Snapshot[]>([]);
-  const [startDate, setStartDate] = useState("2026-01-01");
-  const [endDate, setEndDate] = useState(todayStr());
-  const [datesList, setDatesList] = useState<string[]>([]);
   
   // Локальное состояние редактируемой ячейки: { lineId, date } -> строка ввода
   const [editingCell, setEditingCell] = useState<{ lineId: number; date: string } | null>(null);
@@ -59,36 +56,41 @@ export function SnapshotsMatrixTab({ hide }: { hide: boolean }) {
     loadData();
   }, [loadData]);
 
-  // Генерация списка дат (например, по месяцам в выбранном диапазоне + текущая дата)
-  useEffect(() => {
-    const start = new Date(startDate);
-    const end = new Date(endDate);
-    const dates: string[] = [];
+  // Собираем ВСЕ уникальные даты, где реально есть хотя бы один снапшот, сортируем по возрастанию
+  const rawDates = Array.from(new Set(snapshots.map((s) => s.date))).sort();
+  // Если снапшотов нет вообще, показываем хотя бы сегодняшнюю дату
+  const datesList = rawDates.length > 0 ? rawDates : [todayStr()];
 
-    let curr = new Date(start.getFullYear(), start.getMonth(), 1);
-    while (curr <= end) {
-      dates.push(curr.toISOString().slice(0, 10));
-      curr.setMonth(curr.getMonth() + 1);
-    }
-    // Всегда добавляем конечную дату, если её нет в списке
-    if (dates.length === 0 || dates[dates.length - 1] !== endDate) {
-      dates.push(endDate);
-    }
-    setDatesList(dates);
-  }, [startDate, endDate]);
-
-  // Быстрый поиск снапшота по line_id и date
-  const snapshotMap = new Map<string, Snapshot>();
+  // Карта прямых (реально введенных) снапшотов: "lineId_date" -> Snapshot
+  const directMap = new Map<string, Snapshot>();
   for (const s of snapshots) {
-    snapshotMap.set(`${s.line_id}_${s.date}`, s);
+    directMap.set(`${s.line_id}_${s.date}`, s);
   }
+
+  // Для каждой колонки-даты вычисляем значение с учетом авто-протяжки (carry-forward) с предыдущей даты
+  // Возвращает { amount, is_draft, isReal }
+  const getResolvedCell = (lineId: number, dateIndex: number) => {
+    // Идем назад от текущей даты к прошлому в поисках последнего известного значения для счета
+    for (let i = dateIndex; i >= 0; i--) {
+      const d = datesList[i];
+      const found = directMap.get(`${lineId}_${d}`);
+      if (found) {
+        const isReal = i === dateIndex;
+        return {
+          amount: found.amount,
+          is_draft: found.is_draft,
+          isReal, // true, если в эту дату действительно был ввод; false, если значение унаследовано
+        };
+      }
+    }
+    return null;
+  };
 
   async function handleSaveCell(lineId: number, date: string, val: string) {
     setMsg("");
     try {
-      const existing = snapshotMap.get(`${lineId}_${date}`);
+      const existing = directMap.get(`${lineId}_${date}`);
       if (val.trim() === "") {
-        // Если стерли значение — удаляем снапшот, если он был
         if (existing) {
           await invoke("delete_snapshot", { id: existing.id });
         }
@@ -112,7 +114,7 @@ export function SnapshotsMatrixTab({ hide }: { hide: boolean }) {
     try {
       const r = await invoke<CopyResult>("copy_balances", { date: copyDate });
       setInfo(
-        `Создано черновиков: ${r.created}. Пропущено: уже есть — ${r.skipped_existing}, закрытые — ${r.skipped_closed}, без истории — ${r.skipped_empty}.`
+        `Создано черновиков на ${copyDate}: ${r.created}. Пропущено: уже есть — ${r.skipped_existing}, закрытые — ${r.skipped_closed}, без истории — ${r.skipped_empty}.`
       );
       await loadData();
     } catch (e) {
@@ -124,20 +126,11 @@ export function SnapshotsMatrixTab({ hide }: { hide: boolean }) {
     <div style={{ padding: "8px 4px", fontFamily: "inherit" }}>
       {msg && <div style={{ padding: 12, marginBottom: 16, background: "#fee2e2", color: "#b91c1c", borderRadius: 8 }}>{msg}</div>}
 
-      {/* Панель фильтров и переноса балансов */}
+      {/* Панель переноса остатков */}
       <div style={{ background: "#ffffff", border: "1px solid #e5e7eb", borderRadius: 12, padding: "16px 20px", marginBottom: 20, boxShadow: "0 1px 3px rgba(0,0,0,0.05)", display: "flex", flexWrap: "wrap", gap: 20, alignItems: "center" }}>
-        <div>
-          <label style={{ display: "block", fontSize: 12, color: "#6b7280", marginBottom: 4 }}>Период с</label>
-          <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} style={{ padding: "6px 10px", borderRadius: 6, border: "1px solid #d1d5db", background: "#f9fafb" }} />
-        </div>
-        <div>
-          <label style={{ display: "block", fontSize: 12, color: "#6b7280", marginBottom: 4 }}>Период по</label>
-          <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} style={{ padding: "6px 10px", borderRadius: 6, border: "1px solid #d1d5db", background: "#f9fafb" }} />
-        </div>
-
-        <div style={{ borderLeft: "1px solid #e5e7eb", paddingLeft: 20, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
           <div>
-            <label style={{ display: "block", fontSize: 12, color: "#6b7280", marginBottom: 4 }}>Перенести остатки на дату</label>
+            <label style={{ display: "block", fontSize: 12, color: "#6b7280", marginBottom: 4 }}>Скопировать балансы на дату</label>
             <input type="date" value={copyDate} onChange={(e) => setCopyDate(e.target.value)} style={{ padding: "6px 10px", borderRadius: 6, border: "1px solid #d1d5db", background: "#f9fafb" }} />
           </div>
           <div style={{ paddingTop: 18 }}>
@@ -146,6 +139,9 @@ export function SnapshotsMatrixTab({ hide }: { hide: boolean }) {
             </button>
           </div>
         </div>
+        <div style={{ fontSize: 13, color: "#4b5563", maxWidth: 600 }}>
+          Колонки формируются автоматически по всем датам, где есть история. Пустые ячейки автоматически отображают последний известный остаток (серым курсивом), а реальный ввод подсвечен ярче.
+        </div>
       </div>
 
       {info && <div style={{ padding: "10px 14px", marginBottom: 16, background: "#eff6ff", color: "#1e40af", borderRadius: 8, fontSize: 14 }}>{info}</div>}
@@ -153,8 +149,8 @@ export function SnapshotsMatrixTab({ hide }: { hide: boolean }) {
       {/* Матричная таблица ввода позиций */}
       <div style={{ background: "#ffffff", border: "1px solid #e5e7eb", borderRadius: 12, boxShadow: "0 1px 3px rgba(0,0,0,0.05)", overflow: "hidden" }}>
         <div style={{ padding: "16px 20px", borderBottom: "1px solid #e5e7eb", background: "#fdfdfd", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <h3 style={{ margin: 0, fontSize: 16, color: "#111827" }}>Матрица ввода и динамики позиций</h3>
-          <span style={{ fontSize: 13, color: "#6b7280" }}>Кликните на ячейку для редактирования остатка</span>
+          <h3 style={{ margin: 0, fontSize: 16, color: "#111827" }}>Матрица динамики позиций по датам ввода</h3>
+          <span style={{ fontSize: 13, color: "#6b7280" }}>Кликните на любую ячейку для ввода или изменения остатка</span>
         </div>
 
         <div style={{ overflowX: "auto", maxHeight: "70vh" }}>
@@ -177,9 +173,14 @@ export function SnapshotsMatrixTab({ hide }: { hide: boolean }) {
                   <td style={{ padding: "10px 16px" }}>
                     <span style={{ background: "#e5e7eb", padding: "2px 6px", borderRadius: 4, fontSize: 11 }}>{l.currency}</span>
                   </td>
-                  {datesList.map((d) => {
-                    const snap = snapshotMap.get(`${l.id}_${d}`);
+                  {datesList.map((d, dateIdx) => {
+                    const resolved = getResolvedCell(l.id, dateIdx);
                     const isEditing = editingCell?.lineId === l.id && editingCell?.date === d;
+
+                    // Цвет фона: если черновик — DRAFT_BG, если редактируем — светло-синий, если унаследовано — чуть бледнее
+                    let bg = undefined;
+                    if (resolved?.is_draft) bg = DRAFT_BG;
+                    if (isEditing) bg = "#eff6ff";
 
                     return (
                       <td 
@@ -187,18 +188,21 @@ export function SnapshotsMatrixTab({ hide }: { hide: boolean }) {
                         onClick={() => {
                           if (!isEditing) {
                             setEditingCell({ lineId: l.id, date: d });
-                            setEditValue(snap ? snap.amount : "");
+                            // При клике предлагаем то значение, которое реально было введено на эту дату (или пусто)
+                            const direct = directMap.get(`${l.id}_${d}`);
+                            setEditValue(direct ? direct.amount : (resolved?.amount ?? ""));
                           }
                         }}
                         style={{ 
                           padding: "8px 12px", 
                           textAlign: "right", 
                           borderLeft: "1px solid #f3f4f6", 
-                          background: snap?.is_draft ? DRAFT_BG : (isEditing ? "#eff6ff" : undefined),
+                          background: bg,
                           cursor: "pointer",
-                          fontWeight: snap?.amount ? 600 : 400
+                          fontWeight: resolved?.isReal ? 600 : 400,
+                          color: resolved?.isReal ? "#111827" : "#9ca3af"
                         }}
-                        title={snap?.is_draft ? "Черновик (нажмите для изменения)" : "Нажмите для ввода/редактирования"}
+                        title={resolved?.isReal ? (resolved.is_draft ? "Черновик" : "Зафиксированная позиция") : "Унаследовано с предыдущей даты (кликните для изменения)"}
                       >
                         {isEditing ? (
                           <input 
@@ -214,7 +218,7 @@ export function SnapshotsMatrixTab({ hide }: { hide: boolean }) {
                             style={{ width: "80px", padding: "4px 6px", textAlign: "right", borderRadius: 4, border: "1px solid #2563eb", outline: "none" }}
                           />
                         ) : (
-                          snap?.amount ?? <span style={{ color: "#d1d5db" }}>—</span>
+                          resolved?.amount ?? <span style={{ color: "#d1d5db" }}>—</span>
                         )}
                       </td>
                     );
