@@ -105,7 +105,7 @@ export function CurrentTab({ hide }: { hide: boolean }) {
         <thead>
           <tr>
             <th style={cell}>Владелец</th><th style={cell}>Регион</th><th style={cell}>Где лежат</th>
-            <th style={cell}>Строка</th><th style={cellR}>Остаток</th><th style={cell}>Валюта</th><th style={cell}>Актуально на</th>
+            <th style={cell}>Пояснение</th><th style={cellR}>Остаток</th><th style={cell}>Валюта</th><th style={cell}>Актуально на</th>
           </tr>
         </thead>
         <tbody>
@@ -480,7 +480,7 @@ export function LinesTab() {
             >Добавить банк</button>
           </>
         )}
-        <input placeholder="Название строки (Gold, Депозит, Кошелёк…)" value={name} onChange={(e) => setName(e.target.value)} style={{ minWidth: 200 }} />
+        <input placeholder="Пояснение (например, Зарплатный) (Gold, Депозит, Кошелёк…)" value={name} onChange={(e) => setName(e.target.value)} style={{ minWidth: 200 }} />
         <select value={currency} disabled={editId !== null} onChange={(e) => setCurrency(e.target.value)}>
           {CURRENCIES.map((c) => <option key={c}>{c}</option>)}
         </select>
@@ -508,7 +508,7 @@ export function LinesTab() {
         <thead>
           <tr>
             <th style={cell}>Владелец</th><th style={cell}>Регион</th><th style={cell}>Где лежат</th>
-            <th style={cell}>Строка</th><th style={cell}>Валюта</th><th style={cell}>Тип / Ставка</th><th style={cell}></th>
+            <th style={cell}>Пояснение</th><th style={cell}>Валюта</th><th style={cell}>Тип / Ставка</th><th style={cell}></th>
           </tr>
         </thead>
         <tbody>
