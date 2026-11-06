@@ -161,16 +161,19 @@ pub struct Line {
     pub id: i64,
     pub owner_id: Option<i64>,
     pub owner: String,
-    pub region: String,
     pub region_name: String,
+    pub region: String,
     pub kind: String,
     pub bank_id: Option<i64>,
     pub bank_name: Option<String>,
     pub name: Option<String>,
+    pub currency: String,
     pub is_deposit: bool,
     pub interest_rate_bps: i64,
     pub is_tax: bool,
-    pub currency: String,
+    pub deposit_start_date: Option<String>,
+    pub deposit_end_date: Option<String>,
+    pub deposit_payout_mode: Option<String>,
     pub label: String,
 }
 
@@ -192,7 +195,7 @@ fn make_label(owner: Option<&str>, region: &str, bank_name: Option<&str>, name: 
 
 pub fn list_lines(conn: &Connection) -> Result<Vec<Line>> {
     let mut st = conn.prepare(
-        "SELECT l.id, l.owner_id, o.name, l.region, l.kind, l.bank_id, b.name, l.name, l.currency, l.is_deposit, l.interest_rate_bps, l.is_tax
+        "SELECT l.id, l.owner_id, o.name, l.region, l.kind, l.bank_id, b.name, l.name, l.currency, l.is_deposit, l.interest_rate_bps, l.is_tax, l.deposit_start_date, l.deposit_end_date, l.deposit_payout_mode
          FROM balance_lines l
          LEFT JOIN owners o ON o.id = l.owner_id
          LEFT JOIN banks b ON b.id = l.bank_id
@@ -219,6 +222,9 @@ pub fn list_lines(conn: &Connection) -> Result<Vec<Line>> {
             is_deposit: r.get(9)?,
             interest_rate_bps: r.get(10)?,
             is_tax: r.get(11)?,
+            deposit_start_date: r.get(12)?,
+            deposit_end_date: r.get(13)?,
+            deposit_payout_mode: r.get(14)?,
             label,
         })
     })?;
@@ -275,6 +281,9 @@ pub fn add_line(
     is_deposit: bool,
     interest_rate_bps: i64,
     is_tax: bool,
+    deposit_start_date: Option<&str>,
+    deposit_end_date: Option<&str>,
+    deposit_payout_mode: &str,
 ) -> Result<i64> {
     let name = name.trim().to_string();
     check_owner(conn, owner_id)?;
@@ -285,8 +294,8 @@ pub fn add_line(
         bail!("{}", LINE_DUP);
     }
     conn.execute(
-        "INSERT INTO balance_lines(owner_id, region, kind, bank_id, name, currency, is_deposit, interest_rate_bps, is_tax) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-        params![owner_id, region, kind, bank_id, name, currency, is_deposit, interest_rate_bps, if is_tax { 1 } else { 0 }],
+        "INSERT INTO balance_lines(owner_id, region, kind, bank_id, name, currency, is_deposit, interest_rate_bps, is_tax, deposit_start_date, deposit_end_date, deposit_payout_mode) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+        params![owner_id, region, kind, bank_id, name, currency, is_deposit, interest_rate_bps, if is_tax { 1 } else { 0 }, deposit_start_date, deposit_end_date, deposit_payout_mode],
     )?;
     Ok(conn.last_insert_rowid())
 }
@@ -302,6 +311,9 @@ pub fn update_line(
     is_deposit: bool,
     interest_rate_bps: i64,
     is_tax: bool,
+    deposit_start_date: Option<&str>,
+    deposit_end_date: Option<&str>,
+    deposit_payout_mode: &str,
 ) -> Result<()> {
     let name = name.trim().to_string();
     check_owner(conn, owner_id)?;
@@ -315,8 +327,8 @@ pub fn update_line(
         bail!("{}", LINE_DUP);
     }
     conn.execute(
-        "UPDATE balance_lines SET owner_id = ?1, region = ?2, bank_id = ?3, name = ?4, is_deposit = ?5, interest_rate_bps = ?6, is_tax = ?7 WHERE id = ?8",
-        params![owner_id, region, bank_id, name, if is_deposit { 1 } else { 0 }, interest_rate_bps, if is_tax { 1 } else { 0 }, id],
+        "UPDATE balance_lines SET owner_id = ?1, region = ?2, bank_id = ?3, name = ?4, is_deposit = ?5, interest_rate_bps = ?6, is_tax = ?7, deposit_start_date = ?8, deposit_end_date = ?9, deposit_payout_mode = ?10 WHERE id = ?11",
+        params![owner_id, region, bank_id, name, if is_deposit { 1 } else { 0 }, interest_rate_bps, if is_tax { 1 } else { 0 }, deposit_start_date, deposit_end_date, deposit_payout_mode, id],
     )?;
     Ok(())
 }

@@ -68,40 +68,60 @@ pub async fn list_lines(state: State<'_, AppState>) -> Result<Vec<data::Line>, S
 #[tauri::command]
 pub async fn add_line(
     state: State<'_, AppState>,
-    owner_id: i64,
+    ownerId: i64,
     region: String,
     kind: String,
-    bank_id: Option<i64>,
+    bankId: Option<i64>,
     name: Option<String>,
     currency: String,
-    is_deposit: Option<bool>,
-    interest_rate_bps: Option<i64>,
-    is_tax: Option<bool>,
+    isDeposit: Option<bool>,
+    interestRateBps: Option<i64>,
+    isTax: Option<bool>,
+    depositStartDate: Option<String>,
+    depositEndDate: Option<String>,
+    depositPayoutMode: Option<String>,
 ) -> Result<i64, String> {
     let name_val = name.unwrap_or_default();
-    let is_dep = is_deposit.unwrap_or(false);
-    let rate = interest_rate_bps.unwrap_or(0);
-    let tax = is_tax.unwrap_or(false);
-    with_conn(&state, |c| data::add_line(c, owner_id, &region, &kind, bank_id, &name_val, &currency, is_dep, rate, tax))
+    let is_dep = isDeposit.unwrap_or(false);
+    let rate = interestRateBps.unwrap_or(0);
+    let tax = isTax.unwrap_or(false);
+    let start_d = opt(depositStartDate);
+    let end_d = opt(depositEndDate);
+    let payout = depositPayoutMode.unwrap_or_else(|| "monthly".to_string());
+    
+    with_conn(&state, |c| data::add_line(
+        c, ownerId, &region, &kind, bankId, &name_val, &currency, is_dep, rate, tax,
+        start_d.as_deref(), end_d.as_deref(), &payout
+    ))
 }
 
 #[tauri::command]
 pub async fn update_line(
     state: State<'_, AppState>,
     id: i64,
-    owner_id: i64,
+    ownerId: i64,
     region: String,
-    bank_id: Option<i64>,
+    bankId: Option<i64>,
     name: Option<String>,
-    is_deposit: Option<bool>,
-    interest_rate_bps: Option<i64>,
-    is_tax: Option<bool>,
+    isDeposit: Option<bool>,
+    interestRateBps: Option<i64>,
+    isTax: Option<bool>,
+    depositStartDate: Option<String>,
+    depositEndDate: Option<String>,
+    depositPayoutMode: Option<String>,
 ) -> Result<(), String> {
     let name_val = name.unwrap_or_default();
-    let is_dep = is_deposit.unwrap_or(false);
-    let rate = interest_rate_bps.unwrap_or(0);
-    let tax = is_tax.unwrap_or(false);
-    with_conn(&state, |c| data::update_line(c, id, owner_id, &region, bank_id, &name_val, is_dep, rate, tax))
+    let is_dep = isDeposit.unwrap_or(false);
+    let rate = interestRateBps.unwrap_or(0);
+    let tax = isTax.unwrap_or(false);
+    let start_d = opt(depositStartDate);
+    let end_d = opt(depositEndDate);
+    let payout = depositPayoutMode.unwrap_or_else(|| "monthly".to_string());
+
+    with_conn(&state, |c| data::update_line(
+        c, id, ownerId, &region, bankId, &name_val, is_dep, rate, tax,
+        start_d.as_deref(), end_d.as_deref(), &payout
+    ))
 }
 
 #[tauri::command]
@@ -233,7 +253,6 @@ pub async fn confirm_drafts(state: State<'_, AppState>, date: String) -> Result<
 pub async fn discard_drafts(state: State<'_, AppState>, date: String) -> Result<usize, String> {
     with_conn(&state, |c| data::discard_drafts(c, &date))
 }
-
 
 #[tauri::command]
 pub async fn list_exchange_rates(state: State<'_, AppState>) -> Result<Vec<data::RateRow>, String> {

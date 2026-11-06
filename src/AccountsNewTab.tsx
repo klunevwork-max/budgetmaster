@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { DeleteButton } from "./ui";
+import { DeleteButton, today } from "./ui";
 
 const CURRENCIES = ["KZT", "USD", "EUR", "RUB"];
 const REGIONS = [{ v: "KZ", t: "Казахстан" }, { v: "RU", t: "Россия" }];
@@ -12,6 +12,7 @@ type Line = {
   id: number; owner_id: number | null; owner: string; region: string; kind: string;
   bank_id: number | null; bank_name: string | null; name: string; currency: string; label: string;
   is_deposit: boolean; interest_rate_bps: number;
+  deposit_start_date: string | null; deposit_end_date: string | null; deposit_payout_mode: string | null;
 };
 
 export function AccountsNewTab({ hide }: { hide: boolean }) {
@@ -32,6 +33,9 @@ export function AccountsNewTab({ hide }: { hide: boolean }) {
   const [isDeposit, setIsDeposit] = useState(false);
   const [isTax, setIsTax] = useState(false);
   const [interestRate, setInterestRate] = useState("");
+  const [depositStartDate, setDepositStartDate] = useState(today());
+  const [depositEndDate, setDepositEndDate] = useState("");
+  const [depositPayoutMode, setDepositPayoutMode] = useState("monthly");
 
   const [editId, setEditId] = useState<number | null>(null);
   const [msg, setMsg] = useState("");
@@ -58,6 +62,9 @@ export function AccountsNewTab({ hide }: { hide: boolean }) {
     setIsDeposit(false);
     setIsTax(false);
     setInterestRate("");
+    setDepositStartDate(today());
+    setDepositEndDate("");
+    setDepositPayoutMode("monthly");
   }
 
   async function saveLine() {
@@ -69,29 +76,25 @@ export function AccountsNewTab({ hide }: { hide: boolean }) {
       const parsedRate = parseFloat(interestRate.replace(",", ".")) || 0;
       const interestRateBps = Math.round(parsedRate * 100);
 
+      const payload = {
+        ownerId,
+        region,
+        kind,
+        bankId,
+        name,
+        currency,
+        isDeposit,
+        interestRateBps,
+        isTax,
+        depositStartDate: isDeposit ? depositStartDate : null,
+        depositEndDate: isDeposit && depositEndDate ? depositEndDate : null,
+        depositPayoutMode: isDeposit ? depositPayoutMode : "monthly",
+      };
+
       if (editId === null) {
-        await invoke("add_line", { 
-          ownerId, 
-          region, 
-          kind, 
-          bankId, 
-          name, 
-          currency, 
-          isDeposit, 
-          interestRateBps,
-          isTax
-        });
+        await invoke("add_line", payload);
       } else {
-        await invoke("update_line", { 
-          id: editId, 
-          ownerId, 
-          region, 
-          bankId, 
-          name, 
-          isDeposit, 
-          interestRateBps,
-          isTax
-        });
+        await invoke("update_line", { id: editId, ...payload });
       }
       resetForm();
     });
@@ -152,7 +155,7 @@ export function AccountsNewTab({ hide }: { hide: boolean }) {
             </div>
           )}
 
-          <input placeholder="Пояснение (например, Gold, Зарплатный)" value={name} onChange={(e) => setName(e.target.value)} style={{ padding: "7px 12px", borderRadius: 6, border: "1px solid #d1d5db", minWidth: 220 }} />
+          <input placeholder="Пояснение (например, Gold, Зарплатный)" value={name} onChange={(e) => setName(e.target.value)} style={{ padding: "7px 12px", borderRadius: 6, border: "1px solid #d1d5db", minWidth: 200 }} />
 
           <select value={currency} disabled={editId !== null} onChange={(e) => setCurrency(e.target.value)} style={{ padding: "7px 12px", borderRadius: 6, border: "1px solid #d1d5db", background: "#f9fafb" }}>
             {CURRENCIES.map((c) => <option key={c}>{c}</option>)}
@@ -166,7 +169,27 @@ export function AccountsNewTab({ hide }: { hide: boolean }) {
           </label>
 
           {isDeposit && (
-            <input placeholder="Ставка % (14.5)" value={interestRate} onChange={(e) => setInterestRate(e.target.value)} style={{ padding: "7px 10px", borderRadius: 6, border: "1px solid #d1d5db", width: 120 }} />
+            <div style={{ display: "flex", gap: 8, alignItems: "center", width: "100%", background: "#f9fafb", padding: 12, borderRadius: 8, border: "1px solid #e5e7eb" }}>
+              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                <span style={{ fontSize: 11, color: "#6b7280" }}>Ставка %</span>
+                <input placeholder="14.5" value={interestRate} onChange={(e) => setInterestRate(e.target.value)} style={{ padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", width: 80 }} />
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                <span style={{ fontSize: 11, color: "#6b7280" }}>Дата начала</span>
+                <input type="date" value={depositStartDate} onChange={(e) => setDepositStartDate(e.target.value)} style={{ padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db" }} />
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                <span style={{ fontSize: 11, color: "#6b7280" }}>Дата конца (пусто — бессрочный)</span>
+                <input type="date" value={depositEndDate} onChange={(e) => setDepositEndDate(e.target.value)} style={{ padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db" }} />
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                <span style={{ fontSize: 11, color: "#6b7280" }}>Выплата процентов</span>
+                <select value={depositPayoutMode} onChange={(e) => setDepositPayoutMode(e.target.value)} style={{ padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", background: "#fff" }}>
+                  <option value="monthly">Каждый месяц (1-е число)</option>
+                  <option value="at_maturity">В конце срока</option>
+                </select>
+              </div>
+            </div>
           )}
 
           <div style={{ display: "flex", gap: 8, marginLeft: "auto" }}>
@@ -193,7 +216,7 @@ export function AccountsNewTab({ hide }: { hide: boolean }) {
               <th style={{ padding: "10px 16px" }}>Где лежат</th>
               <th style={{ padding: "10px 16px" }}>Пояснение</th>
               <th style={{ padding: "10px 16px" }}>Валюта</th>
-              <th style={{ padding: "10px 16px" }}>Тип / Ставка</th>
+              <th style={{ padding: "10px 16px" }}>Тип / Детали депозита</th>
               <th style={{ padding: "10px 16px", textAlign: "right" }}>Действия</th>
             </tr>
           </thead>
@@ -209,7 +232,14 @@ export function AccountsNewTab({ hide }: { hide: boolean }) {
                 </td>
                 <td style={{ padding: "10px 16px" }}>
                   {l.is_tax && <span style={{ marginRight: 6, padding: "2px 6px", background: "#fee2e2", color: "#b91c1c", borderRadius: 4, fontSize: 11, fontWeight: 600 }}>Налог</span>}
-                  {l.is_deposit ? `Депозит (${(l.interest_rate_bps / 100).toFixed(2)}%)` : "Обычный"}
+                  {l.is_deposit ? (
+                    <span>
+                      Депозит <b>{(l.interest_rate_bps / 100).toFixed(2)}%</b><br/>
+                      <small style={{ color: "#6b7280" }}>
+                        с {l.deposit_start_date ?? "—"} {l.deposit_end_date ? `до ${l.deposit_end_date}` : "(бессрочно)"} · {l.deposit_payout_mode === "at_maturity" ? "в конце" : "ежемесячно"}
+                      </small>
+                    </span>
+                  ) : "Обычный"}
                 </td>
                 <td style={{ padding: "10px 16px", textAlign: "right" }}>
                   <button
@@ -224,6 +254,9 @@ export function AccountsNewTab({ hide }: { hide: boolean }) {
                       setIsDeposit(l.is_deposit);
                       setIsTax(l.is_tax);
                       setInterestRate(l.is_deposit ? (l.interest_rate_bps / 100).toString() : "");
+                      setDepositStartDate(l.deposit_start_date ?? today());
+                      setDepositEndDate(l.deposit_end_date ?? "");
+                      setDepositPayoutMode(l.deposit_payout_mode ?? "monthly");
                     }}
                     style={{ background: "#f3f4f6", border: "1px solid #d1d5db", padding: "4px 8px", borderRadius: 4, cursor: "pointer", marginRight: 6, fontSize: 12 }}
                   >
@@ -284,7 +317,7 @@ function DictListUI(props: {
                 </>
               ) : (
                 <>
-                  <button onClick={() => { setEditId(it.id); setEditName(it.name); }} style={{ background: "#f3f4f6", border: "1px solid #d1d5db", padding: "4px 8px", borderRadius: 4, cursor: "pointer", marginRight: 6, fontSize: 12 }}>Переименовать</button>
+                  <button onClick={() => { setEditId(it.id); setEditName(it.name); }} style={{ background: "#f9fafb", border: "1px solid #d1d5db", padding: "4px 8px", borderRadius: 4, cursor: "pointer", marginRight: 6, fontSize: 12 }}>Переименовать</button>
                   <DeleteButton text="Удалить" onConfirm={() => { void props.onDelete(it.id); }} />
                 </>
               )}
