@@ -38,7 +38,6 @@ export default function ReportTab({ hide }: { hide: boolean }) {
       .catch((e) => { if (!cancelled) { setMsg(String(e)); setRep(null); } })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [end, auto, startKey]);
 
   const val = (a: string | null, neg?: boolean) =>
@@ -52,7 +51,7 @@ export default function ReportTab({ hide }: { hide: boolean }) {
       <h3>Отчёт о движении баланса</h3>
       <p><small>
         Период (начало, конец]: операции на дату начала не входят, на дату конца входят. Остаток по валюте на дату — сумма
-        последних известных позиций всех счетов. Отчёт общий по всем владельцам и регионам. Черновики (жёлтые) в отчёт не входят.
+        последних известных позиций всех счетов. Черновики (жёлтые) в отчёт не входят.
       </small></p>
       {msg && <p style={{ color: "#b00" }}>{msg}</p>}
 
@@ -115,15 +114,14 @@ export default function ReportTab({ hide }: { hide: boolean }) {
           <h4>3. Операции за период (в KZT)</h4>
           <table style={{ borderCollapse: "collapse", marginBottom: 8 }}>
             <tbody>
-              <tr><td style={cell}>Доходы</td><td style={cellR}>{val(rep.ops_income)}</td></tr>
+              <tr><td style={cell}>Доходы (включая выплаченные проценты по депозитам)</td><td style={cellR}>{val(rep.ops_income)}</td></tr>
               <tr><td style={cell}>Расходы</td><td style={cellR}>{val(rep.ops_expense, true)}</td></tr>
               <tr><td style={cell}><b>Нетто</b></td><td style={cellR}><b>{val(rep.ops_net)}</b></td></tr>
-              <tr><td style={cell}>Виртуальные начисления (депозиты и кредиты)</td><td style={cellR}>{val(rep.virtual_monthly)}</td></tr>
+              <tr><td style={cell}>Виртуальные начисления (будущие проценты по депозитам)</td><td style={cellR}>{val(rep.virtual_monthly)}</td></tr>
             </tbody>
           </table>
           <p><small>
             Операций: {rep.ops_count}{rep.ops_excluded > 0 ? `, без курса исключено: ${rep.ops_excluded}` : ""}.
-            Депозиты и кредиты пока не учитываются (начисления = 0).
           </small></p>
           {rep.ops_by_currency.length > 0 && (
             <table style={{ borderCollapse: "collapse", marginBottom: 16 }}>
