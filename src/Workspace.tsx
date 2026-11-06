@@ -187,25 +187,26 @@ function Operations({ hide }: { hide: boolean }) {
 }
 
 const stickyTabs = {
-  position: "sticky" as const, top: 56, zIndex: 15, background: "#fff",
-  marginLeft: -24, marginRight: -24, padding: "8px 24px", borderBottom: "1px solid #ddd",
+  position: "sticky" as const, top: 60, zIndex: 15, background: "#fff",
+  marginLeft: -24, marginRight: -24, padding: "8px 24px", borderBottom: "1px solid #e5e7eb",
+  display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap" as const, gap: 8
 };
 
 type Tab = "accounts_new" | "rep_new" | "matrix_input" | "cur" | "cur_new" | "rep" | "snap" | "lines" | "ops" | "cats" | "rates";
-const TABS: [Tab, string][] = [
-  ["cur", "Актуальные балансы"],
-  ["matrix_input", "Ввод (Матрица)"],
-  ["cur_new", "Балансы (новый дизайн)"],
-  ["rep", "Отчёт"],
-  ["rep_new", "Отчёт (новый)"],
-  ["snap", "Ввод позиций"],
-  ["lines", "Счета и банки"],
-  ["accounts_new", "Счета и банки (новый)"],
-  ["ops", "Операции"],
-  ["cats", "Категории"],
-  ["rates", "Курсы валют"],
-];
 
+const ALL_TABS: Record<Tab, string> = {
+  cur: "Актуальные балансы",
+  matrix_input: "Ввод (Матрица)",
+  cur_new: "Балансы (новый дизайн)",
+  rep: "Отчёт",
+  rep_new: "Отчёт (новый)",
+  snap: "Ввод позиций",
+  lines: "Счета и банки",
+  accounts_new: "Счета и банки (новый)",
+  ops: "Операции",
+  cats: "Категории",
+  rates: "Курсы валют",
+};
 
 type RateRow = {
   resolved_for_date: string;
@@ -300,16 +301,126 @@ function RatesTab() {
 }
 
 export default function Main() {
-  const [tab, setTab] = useState<Tab>("cur");
+  const DEFAULT_ORDER: Tab[] = ["cur", "matrix_input", "cur_new", "rep", "rep_new", "snap", "lines", "accounts_new", "ops", "cats", "rates"];
+  
+  const [tabOrder, setTabOrder] = useState<Tab[]>(() => {
+    try {
+      const saved = localStorage.getItem("budgetmaster_tab_order");
+      if (saved) {
+        const parsed = JSON.parse(saved) as Tab[];
+        // Проверим, что все ключи на месте
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          const missing = DEFAULT_ORDER.filter(t => !parsed.includes(t));
+          return [...parsed, ...missing];
+        }
+      }
+    } catch {}
+    return DEFAULT_ORDER;
+  });
+
+  const [visibleTabs, setVisibleTabs] = useState<Record<Tab, boolean>>(() => {
+    try {
+      const saved = localStorage.getItem("budgetmaster_visible_tabs");
+      if (saved) {
+        return JSON.parse(saved);
+      }
+    } catch {}
+    const def: Record<string, boolean> = {};
+    DEFAULT_ORDER.forEach(t => def[t] = true);
+    return def as Record<Tab, boolean>;
+  });
+
+  const activeTabs = tabOrder.filter(t => visibleTabs[t] !== false);
+  const [tab, setTab] = useState<Tab>(() => activeTabs[0] || "cur");
   const [hide, setHide] = useState(false);
+  const [configOpen, setConfigOpen] = useState(false);
+
+  useEffect(() => {
+    if (!activeTabs.includes(tab) && activeTabs.length > 0) {
+      setTab(activeTabs[0]);
+    }
+  }, [activeTabs, tab]);
+
+  function saveConfig(newOrder: Tab[], newVis: Record<Tab, boolean>) {
+    setTabOrder(newOrder);
+    setVisibleTabs(newVis);
+    localStorage.setItem("budgetmaster_tab_order", JSON.stringify(newOrder));
+    localStorage.setItem("budgetmaster_visible_tabs", JSON.stringify(newVis));
+  }
+
+  function moveTab(index: number, direction: -1 | 1) {
+    const newIdx = index + direction;
+    if (newIdx < 0 || newIdx >= tabOrder.length) return;
+    const copy = [...tabOrder];
+    const temp = copy[index];
+    copy[index] = copy[newIdx];
+    copy[newIdx] = temp;
+    saveConfig(copy, visibleTabs);
+  }
+
   return (
     <div style={{ marginBottom: 24 }}>
-      <div style={{ ...bar, ...stickyTabs }}>
-        {TABS.map(([k, t]) => (
-          <button key={k} disabled={tab === k} onClick={() => setTab(k)}>{t}</button>
-        ))}
-        <button onClick={() => setHide(!hide)}>{hide ? "Показать суммы" : "Скрыть суммы"}</button>
+      <div style={stickyTabs}>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+          {activeTabs.map((k) => (
+            <button 
+              key={k} 
+              disabled={tab === k} 
+              onClick={() => setTab(k)}
+              style={{
+                padding: "6px 12px",
+                borderRadius: 6,
+                border: tab === k ? "1px solid #2563eb" : "1px solid #d1d5db",
+                background: tab === k ? "#2563eb" : "#f9fafb",
+                color: tab === k ? "#fff" : "#374151",
+                cursor: tab === k ? "default" : "pointer",
+                fontWeight: tab === k ? 500 : 400
+              }}
+            >
+              {ALL_TABS[k]}
+            </button>
+          ))}
+        </div>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <button onClick={() => setConfigOpen(!configOpen)} style={{ padding: "6px 12px", borderRadius: 6, border: "1px solid #d1d5db", background: "#fff", cursor: "pointer" }}>
+            ⚙ Настройка вкладок
+          </button>
+          <button onClick={() => setHide(!hide)} style={{ padding: "6px 12px", borderRadius: 6, border: "1px solid #d1d5db", background: "#fff", cursor: "pointer" }}>
+            {hide ? "Показать суммы" : "Скрыть суммы"}
+          </button>
+        </div>
       </div>
+
+      {configOpen && (
+        <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 12, padding: 20, marginBottom: 20, boxShadow: "0 10px 15px -3px rgba(0,0,0,0.1)" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+            <h4 style={{ margin: 0, fontSize: 16 }}>Настройка видимости и порядка вкладок</h4>
+            <button onClick={() => setConfigOpen(false)} style={{ background: "none", border: "none", fontSize: 16, cursor: "pointer" }}>✕</button>
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {tabOrder.map((t, idx) => (
+              <div key={t} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 12px", background: "#f9fafb", borderRadius: 8, border: "1px solid #e5e7eb" }}>
+                <label style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer", fontWeight: 500 }}>
+                  <input
+                    type="checkbox"
+                    checked={visibleTabs[t] !== false}
+                    onChange={(e) => {
+                      const updated = { ...visibleTabs, [t]: e.target.checked };
+                      saveConfig(tabOrder, updated);
+                    }}
+                  />
+                  {ALL_TABS[t]}
+                </label>
+                <div style={{ display: "flex", gap: 4 }}>
+                  <button disabled={idx === 0} onClick={() => moveTab(idx, -1)} style={{ padding: "2px 8px", cursor: idx === 0 ? "not-allowed" : "pointer" }}>▲</button>
+                  <button disabled={idx === tabOrder.length - 1} onClick={() => moveTab(idx, 1)} style={{ padding: "2px 8px", cursor: idx === tabOrder.length - 1 ? "not-allowed" : "pointer" }}>▼</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {tab === "cur" && <CurrentTab hide={hide} />}
       {tab === "cur_new" && <BalancesNewTab hide={hide} />}
       {tab === "rep" && <ReportTab hide={hide} />}
