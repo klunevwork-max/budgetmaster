@@ -1,3 +1,4 @@
+import { SnapshotsMatrixTab } from "./SnapshotsMatrix";
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { CurrentTab, LinesTab, Snapshots } from "./Balances";
@@ -188,9 +189,10 @@ const stickyTabs = {
   marginLeft: -24, marginRight: -24, padding: "8px 24px", borderBottom: "1px solid #ddd",
 };
 
-type Tab = "cur" | "cur_new" | "rep" | "snap" | "lines" | "ops" | "cats" | "rates";
+type Tab = "matrix_input" | "cur" | "cur_new" | "rep" | "snap" | "lines" | "ops" | "cats" | "rates";
 const TABS: [Tab, string][] = [
   ["cur", "Актуальные балансы"],
+  ["matrix_input", "Ввод (Матрица)"],
   ["cur_new", "Балансы (новый дизайн)"],
   ["rep", "Отчёт"],
   ["snap", "Ввод позиций"],
@@ -312,6 +314,7 @@ export default function Main() {
       {tab === "ops" && <Operations hide={hide} />}
       {tab === "cats" && <Categories />}
       {tab === "rates" && <RatesTab />}
+      {tab === "matrix_input" && <SnapshotsMatrixTab hide={hide} />}
     </div>
   );
 }
