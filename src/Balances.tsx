@@ -124,7 +124,7 @@ export function CurrentTab({ hide }: { hide: boolean }) {
                   return (
                     <tr key={r.line_id}>
                       <td style={cell}>{r.owner || "—"}</td>
-                      <td style={cell}>{r.region_name}</td>
+                      <td style={cell}>{(r as any).region_name}</td>
                       <td style={cell}>{r.place}</td>
                       <td style={cell}>{r.name}</td>
                       <td style={{ ...cellR, background: r.is_draft ? DRAFT_BG : undefined }} title={r.is_draft ? "Черновик: не подтверждён" : undefined}>{r.amount === null ? "—" : <Amt a={r.amount} hide={hide} />}</td>
@@ -155,7 +155,7 @@ export function CurrentTab({ hide }: { hide: boolean }) {
                       return (
                         <tr key={r.line_id}>
                           <td style={cell}>{r.owner || "—"}</td>
-                          <td style={cell}>{r.region_name}</td>
+                          <td style={cell}>{(r as any).region_name}</td>
                           <td style={cell}>{r.place}</td>
                           <td style={cell}>{r.name}</td>
                           <td style={{ ...cellR, background: r.is_draft ? DRAFT_BG : undefined }} title={r.is_draft ? "Черновик: не подтверждён" : undefined}>{r.amount === null ? "—" : <Amt a={r.amount} hide={hide} />}</td>
@@ -207,7 +207,7 @@ export function CurrentTab({ hide }: { hide: boolean }) {
       </div>
 
       {(() => {
-        const rowsToProcess = data.rows.filter((r) => r.amount_minor !== null && (includeTaxInTotal || !r.is_tax));
+        const rowsToProcess = data.rows.filter((r) => (r as any).amount_minor !== null && (includeTaxInTotal || !r.is_tax));
         const isIsolated = (cur: string) => isolateUsdEur && (cur === "USD" || cur === "EUR");
 
         const mainRows = rowsToProcess.filter((r) => !isIsolated(r.currency));
@@ -218,13 +218,13 @@ export function CurrentTab({ hide }: { hide: boolean }) {
           const allPartsMap = new Map<string, number>();
 
           for (const r of rows) {
-            const m = r.amount_minor ?? 0;
-            let groupKey = r.region_name;
-            let groupLabel = r.region_name;
+            const m = (r as any).amount_minor ?? 0;
+            let groupKey = (r as any).region_name;
+            let groupLabel = (r as any).region_name;
             if (group === "currency") { groupKey = r.currency; groupLabel = r.currency; }
             else if (group === "owner") { groupKey = r.owner || "—"; groupLabel = r.owner || "—"; }
             else if (group === "owner_currency") { groupKey = `${r.owner || "—"}_${r.currency}`; groupLabel = `${r.owner || "—"} · ${r.currency}`; }
-            else if (group === "region_currency") { groupKey = `${r.region}_${r.currency}`; groupLabel = `${r.region_name} · ${r.currency}`; }
+            else if (group === "region_currency") { groupKey = `${(r as any).region}_${r.currency}`; groupLabel = `${(r as any).region_name} · ${r.currency}`; }
             else if (group === "all") { groupKey = "all"; groupLabel = "Всего"; }
 
             if (!aggMap.has(groupKey)) {
