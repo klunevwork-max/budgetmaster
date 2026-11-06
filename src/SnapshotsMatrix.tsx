@@ -246,7 +246,7 @@ export function SnapshotsMatrixTab({ hide }: { hide: boolean }) {
           <table style={{ width: "100%", borderCollapse: "collapse", textAlign: "left", fontSize: 13, whiteSpace: "nowrap" }}>
             <thead>
               <tr style={{ background: "#f9fafb", color: "#4b5563", borderBottom: "2px solid #e5e7eb", position: "sticky", top: 0, zIndex: 10 }}>
-                <th style={{ padding: "12px 16px", position: "sticky", left: 0, background: "#f9fafb", zIndex: 11, borderRight: "1px solid #e5e7eb" }}>Владелец · Регион · Где лежат · Пояснение</th>
+                <th style={{ padding: "12px 16px", position: "sticky", left: 0, background: "#f9fafb", zIndex: 11, borderRight: "1px solid #e5e7eb" }}>Место хранения</th>
                 <th style={{ padding: "12px 16px" }}>Валюта</th>
                 {effectiveDates.map((d) => (
                   <th key={d} style={{ padding: "12px 16px", textAlign: "right", borderLeft: "1px solid #f3f4f6" }}>{d}</th>
@@ -257,7 +257,7 @@ export function SnapshotsMatrixTab({ hide }: { hide: boolean }) {
               {visibleLines.map((l) => (
                 <tr key={l.id} style={{ borderBottom: "1px solid #f3f4f6" }}>
                   <td style={{ padding: "10px 16px", position: "sticky", left: 0, background: "#fff", zIndex: 5, borderRight: "1px solid #e5e7eb", fontWeight: 500 }}>
-                    {l.owner || "—"} · {l.region_name} · {l.bank_name ?? "Наличные"} {l.name ? `(${l.name})` : ""}
+                    {l.region_name} · {l.bank_name ?? "Наличные"} · {l.owner || "—"} {l.name ? `(${l.name})` : ""} {l.is_tax && <span style={{ color: "#b91c1c", fontWeight: 600, fontSize: 11, marginLeft: 4 }}>[Налог]</span>}
                   </td>
                   <td style={{ padding: "10px 16px" }}>
                     <span style={{ background: "#e5e7eb", padding: "2px 6px", borderRadius: 4, fontSize: 11 }}>{l.currency}</span>
