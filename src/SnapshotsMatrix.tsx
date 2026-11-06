@@ -137,7 +137,6 @@ export function SnapshotsMatrixTab({ hide }: { hide: boolean }) {
     }
   }
 
-  // Список дат, на которые есть черновики
   const draftDates = Array.from(new Set(snapshots.filter((r) => r.is_draft).map((r) => r.date))).sort().reverse();
 
   const visibleLines = lines.filter((l) => {
@@ -166,18 +165,33 @@ export function SnapshotsMatrixTab({ hide }: { hide: boolean }) {
         <div style={{ display: "flex", gap: 16, alignItems: "center" }}>
           <div>
             <label style={{ display: "block", fontSize: 12, color: "#6b7280", marginBottom: 4 }}>Период с</label>
-            <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} style={{ padding: "6px 10px", borderRadius: 6, border: "1px solid #d1d5db", background: "#f9fafb" }} />
+            <input 
+              type="date" 
+              value={startDate} 
+              onChange={(e) => { setStartDate(e.target.value); e.target.blur(); }} 
+              style={{ padding: "6px 10px", borderRadius: 6, border: "1px solid #d1d5db", background: "#f9fafb" }} 
+            />
           </div>
           <div>
             <label style={{ display: "block", fontSize: 12, color: "#6b7280", marginBottom: 4 }}>по</label>
-            <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} style={{ padding: "6px 10px", borderRadius: 6, border: "1px solid #d1d5db", background: "#f9fafb" }} />
+            <input 
+              type="date" 
+              value={endDate} 
+              onChange={(e) => { setEndDate(e.target.value); e.target.blur(); }} 
+              style={{ padding: "6px 10px", borderRadius: 6, border: "1px solid #d1d5db", background: "#f9fafb" }} 
+            />
           </div>
         </div>
 
         <div style={{ borderLeft: "1px solid #e5e7eb", paddingLeft: 24, display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
           <div>
             <label style={{ display: "block", fontSize: 12, color: "#6b7280", marginBottom: 4 }}>Скопировать балансы на дату</label>
-            <input type="date" value={copyDate} onChange={(e) => setCopyDate(e.target.value)} style={{ padding: "6px 10px", borderRadius: 6, border: "1px solid #d1d5db", background: "#f9fafb" }} />
+            <input 
+              type="date" 
+              value={copyDate} 
+              onChange={(e) => { setCopyDate(e.target.value); e.target.blur(); }} 
+              style={{ padding: "6px 10px", borderRadius: 6, border: "1px solid #d1d5db", background: "#f9fafb" }} 
+            />
           </div>
           <div style={{ paddingTop: 18 }}>
             <button onClick={handleCopyBalances} style={{ background: "#2563eb", color: "#fff", border: "none", padding: "7px 14px", borderRadius: 6, cursor: "pointer", fontWeight: 500 }}>
