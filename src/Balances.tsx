@@ -48,6 +48,9 @@ export function CurrentTab({ hide }: { hide: boolean }) {
   const [region, setRegion] = useState("");
   const [hideZero, setHideZero] = useState(true);
   const [group, setGroup] = useState("region_currency");
+  const [includeTaxInTotal, setIncludeTaxInTotal] = useState(false);
+  const [targetCurrency, setTargetCurrency] = useState("KZT");
+  const [isolateUsdEur, setIsolateUsdEur] = useState(true);
   const [data, setData] = useState<Balances>({ rows: [], groups: [], grand_kzt: null, rates: [], missing_rates: [] });
   const [rep, setRep] = useState<Refresh | null>(null);
   const [tick, setTick] = useState(0);
@@ -169,38 +172,175 @@ export function CurrentTab({ hide }: { hide: boolean }) {
         );
       })()}
 
-      <h4>Итого</h4>
-      <div style={bar}>
+      <div style={{ marginTop: 24, marginBottom: 8, display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap" }}>
+        <h4 style={{ margin: 0 }}>Итого</h4>
         <label>
           Группировать по:{" "}
           <select value={group} onChange={(e) => setGroup(e.target.value)}>
             {GROUPS.map(([k, t]) => <option key={k} value={k}>{t}</option>)}
           </select>
         </label>
+        <label>
+          <input 
+            type="checkbox" 
+            checked={includeTaxInTotal} 
+            onChange={(e) => setIncludeTaxInTotal(e.target.checked)} 
+          />{" "}
+          Включать налоги в итоги
+        </label>
+        <label>
+          Валюта итогов:{" "}
+          <select value={targetCurrency} onChange={(e) => setTargetCurrency(e.target.value)}>
+            {["KZT", "USD", "EUR", "RUB"].map((c) => (
+              <option key={c} value={c}>{c}</option>
+            ))}
+          </select>
+        </label>
+        <label>
+          <input 
+            type="checkbox" 
+            checked={isolateUsdEur} 
+            onChange={(e) => setIsolateUsdEur(e.target.checked)} 
+          />{" "}
+          Изолировать USD/EUR в отдельный блок
+        </label>
       </div>
-      <table style={{ borderCollapse: "collapse", marginBottom: 8 }}>
-        <thead>
-          <tr><th style={cell}>Группа</th><th style={cellR}>Суммы по валютам</th><th style={cellR}>≈ в KZT</th></tr>
-        </thead>
-        <tbody>
-          {data.groups.map((g) => (
-            <tr key={g.label}>
-              <td style={cell}>{g.label}</td>
-              <td style={cellR}>
-                {g.parts.map((p) => (
-                  <div key={p.currency}><Amt a={p.amount} hide={hide} /> {p.currency}</div>
+
+      {(() => {
+        const rowsToProcess = data.rows.filter((r) => r.amount_minor !== null && (includeTaxInTotal || !r.is_tax));
+        const isIsolated = (cur: string) => isolateUsdEur && (cur === "USD" || cur === "EUR");
+
+        const mainRows = rowsToProcess.filter((r) => !isIsolated(r.currency));
+        const isolatedRows = rowsToProcess.filter((r) => isIsolated(r.currency));
+
+        const buildSummary = (rows: typeof data.rows) => {
+          const aggMap = new Map<string, { label: string; partsMap: Map<string, number> }>();
+          const allPartsMap = new Map<string, number>();
+
+          for (const r of rows) {
+            const m = r.amount_minor ?? 0;
+            let groupKey = r.region_name;
+            let groupLabel = r.region_name;
+            if (group === "currency") { groupKey = r.currency; groupLabel = r.currency; }
+            else if (group === "owner") { groupKey = r.owner || "—"; groupLabel = r.owner || "—"; }
+            else if (group === "owner_currency") { groupKey = `${r.owner || "—"}_${r.currency}`; groupLabel = `${r.owner || "—"} · ${r.currency}`; }
+            else if (group === "region_currency") { groupKey = `${r.region}_${r.currency}`; groupLabel = `${r.region_name} · ${r.currency}`; }
+            else if (group === "all") { groupKey = "all"; groupLabel = "Всего"; }
+
+            if (!aggMap.has(groupKey)) {
+              aggMap.set(groupKey, { label: groupLabel, partsMap: new Map() });
+            }
+            const g = aggMap.get(groupKey)!;
+            g.partsMap.set(r.currency, (g.partsMap.get(r.currency) || 0) + m);
+            allPartsMap.set(r.currency, (allPartsMap.get(r.currency) || 0) + m);
+          }
+
+          const rateMap = new Map<string, number>();
+          rateMap.set("KZT", 1);
+          for (const rt of data.rates) {
+            const num = parseFloat(rt.rate.replace(/\s/g, "").replace(",", "."));
+            if (!isNaN(num)) rateMap.set(rt.currency, num);
+          }
+
+          const convertToTarget = (partsMap: Map<string, number>) => {
+            let totalKzt = 0;
+            for (const [cur, amt] of partsMap.entries()) {
+              // amt хранится в минорных единицах (тенге/копейки * 100), делим на 100 для получения реальных единиц валюты
+              const realAmt = amt / 100;
+              const rToKzt = rateMap.get(cur) ?? (cur === "KZT" ? 1 : null);
+              if (rToKzt !== null) {
+                totalKzt += realAmt * rToKzt;
+              }
+            }
+            const targetRate = rateMap.get(targetCurrency) ?? (targetCurrency === "KZT" ? 1 : 1);
+            const res = targetRate > 0 ? totalKzt / targetRate : 0;
+            return Math.floor(res);
+          };
+
+          const groupsResult = Array.from(aggMap.values()).map((g) => {
+            const parts = Array.from(g.partsMap.entries()).map(([currency, amount_minor]) => ({
+              currency,
+              amount_minor,
+              amount: Math.floor(amount_minor / 100).toLocaleString("ru-RU", { maximumFractionDigits: 0 })
+            }));
+            const convertedVal = convertToTarget(g.partsMap);
+            return {
+              label: g.label,
+              parts,
+              converted: convertedVal,
+              convertedStr: convertedVal.toLocaleString("ru-RU", { maximumFractionDigits: 0 })
+            };
+          });
+
+          const grandConverted = convertToTarget(allPartsMap);
+          const grandStr = grandConverted.toLocaleString("ru-RU", { maximumFractionDigits: 0 });
+
+          return { groups: groupsResult, grandStr };
+        };
+
+        const mainSummary = buildSummary(mainRows);
+        const isolatedSummary = isolateUsdEur ? buildSummary(isolatedRows) : null;
+
+        return (
+          <>
+            <table style={{ borderCollapse: "collapse", marginBottom: 8, width: "100%" }}>
+              <thead>
+                <tr><th style={cell}>Группа</th><th style={cellR}>Суммы по валютам</th><th style={cellR}>≈ в {targetCurrency}</th></tr>
+              </thead>
+              <tbody>
+                {mainSummary.groups.map((g) => (
+                  <tr key={g.label}>
+                    <td style={cell}>{g.label}</td>
+                    <td style={cellR}>
+                      {g.parts.map((p) => (
+                        <div key={p.currency}><Amt a={p.amount} hide={hide} /> {p.currency}</div>
+                      ))}
+                    </td>
+                    <td style={cellR}><Amt a={g.convertedStr} hide={hide} /></td>
+                  </tr>
                 ))}
-              </td>
-              <td style={cellR}>{g.kzt === null ? "н/д" : <Amt a={g.kzt} hide={hide} />}</td>
-            </tr>
-          ))}
-          <tr>
-            <td style={cell}><b>Всего в KZT</b></td>
-            <td style={cell}></td>
-            <td style={cellR}><b>{data.grand_kzt === null ? "н/д" : <Amt a={data.grand_kzt} hide={hide} />}</b></td>
-          </tr>
-        </tbody>
-      </table>
+                {mainSummary.groups.length === 0 && (
+                  <tr><td style={cell} colSpan={3}>Нет данных для отображения в итогах.</td></tr>
+                )}
+                <tr>
+                  <td style={cell}><b>Всего в {targetCurrency} (Основное)</b></td>
+                  <td style={cell}></td>
+                  <td style={cellR}><b><Amt a={mainSummary.grandStr} hide={hide} /></b></td>
+                </tr>
+              </tbody>
+            </table>
+
+            {isolateUsdEur && isolatedSummary && isolatedSummary.groups.length > 0 && (
+              <div style={{ marginTop: 20 }}>
+                <h5 style={{ marginBottom: 8, color: "#555" }}>Валютный резерв (USD / EUR вне основных активов)</h5>
+                <table style={{ borderCollapse: "collapse", marginBottom: 8, width: "100%", background: "#fafafa" }}>
+                  <thead>
+                    <tr><th style={cell}>Группа</th><th style={cellR}>Суммы по валютам</th><th style={cellR}>≈ в {targetCurrency}</th></tr>
+                  </thead>
+                  <tbody>
+                    {isolatedSummary.groups.map((g) => (
+                      <tr key={g.label}>
+                        <td style={cell}>{g.label}</td>
+                        <td style={cellR}>
+                          {g.parts.map((p) => (
+                            <div key={p.currency}><Amt a={p.amount} hide={hide} /> {p.currency}</div>
+                          ))}
+                        </td>
+                        <td style={cellR}><Amt a={g.convertedStr} hide={hide} /></td>
+                      </tr>
+                    ))}
+                    <tr>
+                      <td style={cell}><b>Всего USD/EUR в {targetCurrency}</b></td>
+                      <td style={cell}></td>
+                      <td style={cellR}><b><Amt a={isolatedSummary.grandStr} hide={hide} /></b></td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </>
+        );
+      })()}
 
       {data.rates.length > 0 && (
         <p><small>
