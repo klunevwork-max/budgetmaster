@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { DRAFT_BG } from "./ui";
+import { DRAFT_BG, DeleteButton } from "./ui";
 
 type Line = {
   id: number;
@@ -34,12 +34,10 @@ export function SnapshotsMatrixTab({ hide }: { hide: boolean }) {
   const [lines, setLines] = useState<Line[]>([]);
   const [snapshots, setSnapshots] = useState<Snapshot[]>([]);
   
-  // Фильтр периода дат и чекбокс скрытия нулевых строк
   const [startDate, setStartDate] = useState("2026-01-01");
   const [endDate, setEndDate] = useState(todayStr());
   const [hideZeros, setHideZeros] = useState(true);
 
-  // Редактируемая ячейка
   const [editingCell, setEditingCell] = useState<{ lineId: number; date: string } | null>(null);
   const [editValue, setEditValue] = useState("");
 
@@ -62,7 +60,16 @@ export function SnapshotsMatrixTab({ hide }: { hide: boolean }) {
     loadData();
   }, [loadData]);
 
-  // Все уникальные даты из снапшотов
+  async function act(fn: () => Promise<unknown>) {
+    setMsg("");
+    try {
+      await fn();
+      await loadData();
+    } catch (e) {
+      setMsg(String(e));
+    }
+  }
+
   const allRawDates = Array.from(new Set(snapshots.map((s) => s.date))).sort();
   
   const datesList = allRawDates.filter((d) => {
@@ -73,7 +80,6 @@ export function SnapshotsMatrixTab({ hide }: { hide: boolean }) {
 
   const effectiveDates = datesList.length > 0 ? datesList : (allRawDates.length > 0 ? allRawDates : [todayStr()]);
 
-  // Карта прямых снапшотов: "lineId_date" -> Snapshot
   const directMap = new Map<string, Snapshot>();
   for (const s of snapshots) {
     directMap.set(`${s.line_id}_${s.date}`, s);
@@ -97,7 +103,6 @@ export function SnapshotsMatrixTab({ hide }: { hide: boolean }) {
   };
 
   async function handleSaveCell(lineId: number, date: string, val: string) {
-    setMsg("");
     try {
       const existing = directMap.get(`${lineId}_${date}`);
       if (val.trim() === "") {
@@ -132,10 +137,11 @@ export function SnapshotsMatrixTab({ hide }: { hide: boolean }) {
     }
   }
 
-  // Фильтрация строк: если включен hideZeros, скрываем счета, у которых за ВСЕ видимые даты баланс = 0 или отсутствует
+  // Список дат, на которые есть черновики
+  const draftDates = Array.from(new Set(snapshots.filter((r) => r.is_draft).map((r) => r.date))).sort().reverse();
+
   const visibleLines = lines.filter((l) => {
     if (!hideZeros) return true;
-    // Проверяем, есть ли хоть в одной эффективной дате ненулевой баланс
     let hasNonZero = false;
     for (const d of effectiveDates) {
       const res = getResolvedCell(l.id, d);
@@ -155,7 +161,7 @@ export function SnapshotsMatrixTab({ hide }: { hide: boolean }) {
     <div style={{ padding: "8px 4px", fontFamily: "inherit" }}>
       {msg && <div style={{ padding: 12, marginBottom: 16, background: "#fee2e2", color: "#b91c1c", borderRadius: 8 }}>{msg}</div>}
 
-      {/* Панель управления */}
+      {/* Панель управления и копирования */}
       <div style={{ background: "#ffffff", border: "1px solid #e5e7eb", borderRadius: 12, padding: "16px 20px", marginBottom: 20, boxShadow: "0 1px 3px rgba(0,0,0,0.05)", display: "flex", flexWrap: "wrap", gap: 24, alignItems: "center" }}>
         <div style={{ display: "flex", gap: 16, alignItems: "center" }}>
           <div>
@@ -190,11 +196,36 @@ export function SnapshotsMatrixTab({ hide }: { hide: boolean }) {
 
       {info && <div style={{ padding: "10px 14px", marginBottom: 16, background: "#eff6ff", color: "#1e40af", borderRadius: 8, fontSize: 14 }}>{info}</div>}
 
+      {/* Управление черновиками */}
+      {draftDates.length > 0 && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 20 }}>
+          {draftDates.map((d) => (
+            <div key={d} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", background: DRAFT_BG, border: "1px solid #fde047", padding: "10px 16px", borderRadius: 8 }}>
+              <span style={{ fontWeight: 500, color: "#854d0e" }}>
+                ⚠️ Черновики на {d}: {snapshots.filter((r) => r.is_draft && r.date === d).length} счетов
+              </span>
+              <div style={{ display: "flex", gap: 10 }}>
+                <button 
+                  onClick={() => act(() => invoke("confirm_drafts", { date: d }))}
+                  style={{ background: "#16a34a", color: "#fff", border: "none", padding: "6px 12px", borderRadius: 6, cursor: "pointer", fontSize: 13, fontWeight: 500 }}
+                >
+                  Подтвердить все на {d}
+                </button>
+                <DeleteButton 
+                  text="Удалить черновики" 
+                  onConfirm={() => { void act(() => invoke("discard_drafts", { date: d })); }} 
+                />
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* Таблица */}
       <div style={{ background: "#ffffff", border: "1px solid #e5e7eb", borderRadius: 12, boxShadow: "0 1px 3px rgba(0,0,0,0.05)", overflow: "hidden" }}>
         <div style={{ padding: "16px 20px", borderBottom: "1px solid #e5e7eb", background: "#fdfdfd", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <h3 style={{ margin: 0, fontSize: 16, color: "#111827" }}>Матрица динамики позиций</h3>
-          <span style={{ fontSize: 13, color: "#6b7280" }}>Нажмите на иконку карандаша в ячейке для редактирования</span>
+          <span style={{ fontSize: 13, color: "#6b7280" }}>Нажмите на иконку карандаша для редактирования остатка</span>
         </div>
 
         <div style={{ overflowX: "auto", maxHeight: "70vh" }}>
@@ -237,27 +268,43 @@ export function SnapshotsMatrixTab({ hide }: { hide: boolean }) {
                           color: resolved?.isReal ? "#111827" : "#9ca3af",
                           position: "relative"
                         }}
-                        className="matrix-cell"
                       >
                         {isEditing ? (
-                          <input 
-                            autoFocus
-                            type="text"
-                            value={editValue}
-                            onChange={(e) => setEditValue(e.target.value)}
-                            onBlur={() => handleSaveCell(l.id, d, editValue)}
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter") handleSaveCell(l.id, d, editValue);
-                              if (e.key === "Escape") setEditingCell(null);
-                            }}
-                            ref={(input) => {
-                              if (input) {
-                                input.focus();
-                                input.setSelectionRange(0, 0); // Ставим курсор в самое начало (к левому краю)
-                              }
-                            }}
-                            style={{ width: "80px", padding: "4px 6px", textAlign: "left", borderRadius: 4, border: "1px solid #2563eb", outline: "none" }}
-                          />
+                          <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 4 }}>
+                            <input 
+                              autoFocus
+                              type="text"
+                              value={editValue}
+                              onChange={(e) => setEditValue(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") handleSaveCell(l.id, d, editValue);
+                                if (e.key === "Escape") setEditingCell(null);
+                              }}
+                              ref={(input) => {
+                                if (input) {
+                                  input.focus();
+                                  input.setSelectionRange(0, 0);
+                                }
+                              }}
+                              style={{ width: "75px", padding: "4px 6px", textAlign: "left", borderRadius: 4, border: "1px solid #2563eb", outline: "none" }}
+                            />
+                            {/* Кнопка Подтвердить (Галочка) */}
+                            <button
+                              onClick={() => handleSaveCell(l.id, d, editValue)}
+                              title="Сохранить"
+                              style={{ background: "#16a34a", color: "#fff", border: "none", borderRadius: 4, width: 22, height: 22, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11 }}
+                            >
+                              ✓
+                            </button>
+                            {/* Кнопка Отменить (Крестик) */}
+                            <button
+                              onClick={() => setEditingCell(null)}
+                              title="Отменить"
+                              style={{ background: "#dc2626", color: "#fff", border: "none", borderRadius: 4, width: 22, height: 22, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11 }}
+                            >
+                              ✕
+                            </button>
+                          </div>
                         ) : (
                           <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 6 }}>
                             <span>{resolved?.amount ?? "—"}</span>
