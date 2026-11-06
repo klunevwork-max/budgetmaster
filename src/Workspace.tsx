@@ -1,3 +1,4 @@
+import { AccountsNewTab } from "./AccountsNewTab";
 import ReportNewTab from "./ReportNewTab";
 import { SnapshotsMatrixTab } from "./SnapshotsMatrix";
 import { useCallback, useEffect, useState } from "react";
@@ -190,7 +191,7 @@ const stickyTabs = {
   marginLeft: -24, marginRight: -24, padding: "8px 24px", borderBottom: "1px solid #ddd",
 };
 
-type Tab = "rep_new" | "matrix_input" | "cur" | "cur_new" | "rep" | "snap" | "lines" | "ops" | "cats" | "rates";
+type Tab = "accounts_new" | "rep_new" | "matrix_input" | "cur" | "cur_new" | "rep" | "snap" | "lines" | "ops" | "cats" | "rates";
 const TABS: [Tab, string][] = [
   ["cur", "Актуальные балансы"],
   ["matrix_input", "Ввод (Матрица)"],
@@ -199,6 +200,7 @@ const TABS: [Tab, string][] = [
   ["rep_new", "Отчёт (новый)"],
   ["snap", "Ввод позиций"],
   ["lines", "Счета и банки"],
+  ["accounts_new", "Счета и банки (новый)"],
   ["ops", "Операции"],
   ["cats", "Категории"],
   ["rates", "Курсы валют"],
@@ -314,6 +316,7 @@ export default function Main() {
       {tab === "rep_new" && <ReportNewTab hide={hide} />}
       {tab === "snap" && <Snapshots hide={hide} />}
       {tab === "lines" && <LinesTab />}
+      {tab === "accounts_new" && <AccountsNewTab hide={hide} />}
       {tab === "ops" && <Operations hide={hide} />}
       {tab === "cats" && <Categories />}
       {tab === "rates" && <RatesTab />}
