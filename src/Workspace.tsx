@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { CurrentTab, LinesTab, Snapshots } from "./Balances";
+import { BalancesNewTab } from "./BalancesNew";
 import ReportTab from "./ReportTab";
 import { Amt, AmountInput, DeleteButton, bar, cell, cellR, formatInput, today, whole } from "./ui";
 
@@ -187,9 +188,10 @@ const stickyTabs = {
   marginLeft: -24, marginRight: -24, padding: "8px 24px", borderBottom: "1px solid #ddd",
 };
 
-type Tab = "cur" | "rep" | "snap" | "lines" | "ops" | "cats" | "rates";
+type Tab = "cur" | "cur_new" | "rep" | "snap" | "lines" | "ops" | "cats" | "rates";
 const TABS: [Tab, string][] = [
   ["cur", "Актуальные балансы"],
+  ["cur_new", "Балансы (новый дизайн)"],
   ["rep", "Отчёт"],
   ["snap", "Ввод позиций"],
   ["lines", "Счета и банки"],
@@ -303,6 +305,7 @@ export default function Main() {
         <button onClick={() => setHide(!hide)}>{hide ? "Показать суммы" : "Скрыть суммы"}</button>
       </div>
       {tab === "cur" && <CurrentTab hide={hide} />}
+      {tab === "cur_new" && <BalancesNewTab hide={hide} />}
       {tab === "rep" && <ReportTab hide={hide} />}
       {tab === "snap" && <Snapshots hide={hide} />}
       {tab === "lines" && <LinesTab />}
