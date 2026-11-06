@@ -7,6 +7,7 @@ type Line = {
   owner: string;
   region: string;
   region_name: string;
+  bank_name: string | null;
   place: string;
   name: string | null;
   currency: string;
@@ -33,7 +34,11 @@ export function SnapshotsMatrixTab({ hide }: { hide: boolean }) {
   const [lines, setLines] = useState<Line[]>([]);
   const [snapshots, setSnapshots] = useState<Snapshot[]>([]);
   
-  // Локальное состояние редактируемой ячейки: { lineId, date } -> строка ввода
+  // Фильтр периода дат для колонок
+  const [startDate, setStartDate] = useState("2026-01-01");
+  const [endDate, setEndDate] = useState(todayStr());
+
+  // Локальное состояние редактируемой ячейки
   const [editingCell, setEditingCell] = useState<{ lineId: number; date: string } | null>(null);
   const [editValue, setEditValue] = useState("");
 
@@ -56,10 +61,18 @@ export function SnapshotsMatrixTab({ hide }: { hide: boolean }) {
     loadData();
   }, [loadData]);
 
-  // Собираем ВСЕ уникальные даты, где реально есть хотя бы один снапшот, сортируем по возрастанию
-  const rawDates = Array.from(new Set(snapshots.map((s) => s.date))).sort();
-  // Если снапшотов нет вообще, показываем хотя бы сегодняшнюю дату
-  const datesList = rawDates.length > 0 ? rawDates : [todayStr()];
+  // Все уникальные даты из снапшотов
+  const allRawDates = Array.from(new Set(snapshots.map((s) => s.date))).sort();
+  
+  // Фильтруем даты по выбранному пользователем диапазону [startDate, endDate]
+  const datesList = allRawDates.filter((d) => {
+    if (startDate && d < startDate) return false;
+    if (endDate && d > endDate) return false;
+    return true;
+  });
+
+  // Если в диапазон ничего не попало, показываем хотя бы startDate или endDate, чтобы таблица не пустела
+  const effectiveDates = datesList.length > 0 ? datesList : (allRawDates.length > 0 ? allRawDates : [todayStr()]);
 
   // Карта прямых (реально введенных) снапшотов: "lineId_date" -> Snapshot
   const directMap = new Map<string, Snapshot>();
@@ -67,19 +80,20 @@ export function SnapshotsMatrixTab({ hide }: { hide: boolean }) {
     directMap.set(`${s.line_id}_${s.date}`, s);
   }
 
-  // Для каждой колонки-даты вычисляем значение с учетом авто-протяжки (carry-forward) с предыдущей даты
-  // Возвращает { amount, is_draft, isReal }
-  const getResolvedCell = (lineId: number, dateIndex: number) => {
-    // Идем назад от текущей даты к прошлому в поисках последнего известного значения для счета
-    for (let i = dateIndex; i >= 0; i--) {
-      const d = datesList[i];
+  // Для вычисления актуального значения с учетом истории до начала отфильтрованного диапазона
+  const getResolvedCell = (lineId: number, targetDate: string) => {
+    // Ищем самую последнюю запись для этого счета на дату targetDate или раньше
+    // Сначала проверим прямые попадания или отмотаем назад по всем известным датам снапшотов
+    const relevantDates = allRawDates.filter((d) => d <= targetDate);
+    for (let i = relevantDates.length - 1; i >= 0; i--) {
+      const d = relevantDates[i];
       const found = directMap.get(`${lineId}_${d}`);
       if (found) {
-        const isReal = i === dateIndex;
+        const isReal = d === targetDate;
         return {
           amount: found.amount,
           is_draft: found.is_draft,
-          isReal, // true, если в эту дату действительно был ввод; false, если значение унаследовано
+          isReal,
         };
       }
     }
@@ -126,9 +140,20 @@ export function SnapshotsMatrixTab({ hide }: { hide: boolean }) {
     <div style={{ padding: "8px 4px", fontFamily: "inherit" }}>
       {msg && <div style={{ padding: 12, marginBottom: 16, background: "#fee2e2", color: "#b91c1c", borderRadius: 8 }}>{msg}</div>}
 
-      {/* Панель переноса остатков */}
-      <div style={{ background: "#ffffff", border: "1px solid #e5e7eb", borderRadius: 12, padding: "16px 20px", marginBottom: 20, boxShadow: "0 1px 3px rgba(0,0,0,0.05)", display: "flex", flexWrap: "wrap", gap: 20, alignItems: "center" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+      {/* Верхняя панель: Фильтр дат и перенос балансов */}
+      <div style={{ background: "#ffffff", border: "1px solid #e5e7eb", borderRadius: 12, padding: "16px 20px", marginBottom: 20, boxShadow: "0 1px 3px rgba(0,0,0,0.05)", display: "flex", flexWrap: "wrap", gap: 24, alignItems: "center" }}>
+        <div style={{ display: "flex", gap: 16, alignItems: "center" }}>
+          <div>
+            <label style={{ display: "block", fontSize: 12, color: "#6b7280", marginBottom: 4 }}>Период с</label>
+            <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} style={{ padding: "6px 10px", borderRadius: 6, border: "1px solid #d1d5db", background: "#f9fafb" }} />
+          </div>
+          <div>
+            <label style={{ display: "block", fontSize: 12, color: "#6b7280", marginBottom: 4 }}>по</label>
+            <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} style={{ padding: "6px 10px", borderRadius: 6, border: "1px solid #d1d5db", background: "#f9fafb" }} />
+          </div>
+        </div>
+
+        <div style={{ borderLeft: "1px solid #e5e7eb", paddingLeft: 24, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
           <div>
             <label style={{ display: "block", fontSize: 12, color: "#6b7280", marginBottom: 4 }}>Скопировать балансы на дату</label>
             <input type="date" value={copyDate} onChange={(e) => setCopyDate(e.target.value)} style={{ padding: "6px 10px", borderRadius: 6, border: "1px solid #d1d5db", background: "#f9fafb" }} />
@@ -139,9 +164,6 @@ export function SnapshotsMatrixTab({ hide }: { hide: boolean }) {
             </button>
           </div>
         </div>
-        <div style={{ fontSize: 13, color: "#4b5563", maxWidth: 600 }}>
-          Колонки формируются автоматически по всем датам, где есть история. Пустые ячейки автоматически отображают последний известный остаток (серым курсивом), а реальный ввод подсвечен ярче.
-        </div>
       </div>
 
       {info && <div style={{ padding: "10px 14px", marginBottom: 16, background: "#eff6ff", color: "#1e40af", borderRadius: 8, fontSize: 14 }}>{info}</div>}
@@ -149,17 +171,17 @@ export function SnapshotsMatrixTab({ hide }: { hide: boolean }) {
       {/* Матричная таблица ввода позиций */}
       <div style={{ background: "#ffffff", border: "1px solid #e5e7eb", borderRadius: 12, boxShadow: "0 1px 3px rgba(0,0,0,0.05)", overflow: "hidden" }}>
         <div style={{ padding: "16px 20px", borderBottom: "1px solid #e5e7eb", background: "#fdfdfd", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <h3 style={{ margin: 0, fontSize: 16, color: "#111827" }}>Матрица динамики позиций по датам ввода</h3>
-          <span style={{ fontSize: 13, color: "#6b7280" }}>Кликните на любую ячейку для ввода или изменения остатка</span>
+          <h3 style={{ margin: 0, fontSize: 16, color: "#111827" }}>Матрица динамики позиций</h3>
+          <span style={{ fontSize: 13, color: "#6b7280" }}>Кликните на ячейку для ввода/редактирования остатка</span>
         </div>
 
         <div style={{ overflowX: "auto", maxHeight: "70vh" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", textAlign: "left", fontSize: 13, whiteSpace: "nowrap" }}>
             <thead>
               <tr style={{ background: "#f9fafb", color: "#4b5563", borderBottom: "2px solid #e5e7eb", position: "sticky", top: 0, zIndex: 10 }}>
-                <th style={{ padding: "12px 16px", position: "sticky", left: 0, background: "#f9fafb", zIndex: 11, borderRight: "1px solid #e5e7eb" }}>Счет / Актив</th>
+                <th style={{ padding: "12px 16px", position: "sticky", left: 0, background: "#f9fafb", zIndex: 11, borderRight: "1px solid #e5e7eb" }}>Владелец · Регион · Где лежат · Пояснение</th>
                 <th style={{ padding: "12px 16px" }}>Валюта</th>
-                {datesList.map((d) => (
+                {effectiveDates.map((d) => (
                   <th key={d} style={{ padding: "12px 16px", textAlign: "right", borderLeft: "1px solid #f3f4f6" }}>{d}</th>
                 ))}
               </tr>
@@ -168,16 +190,15 @@ export function SnapshotsMatrixTab({ hide }: { hide: boolean }) {
               {lines.map((l) => (
                 <tr key={l.id} style={{ borderBottom: "1px solid #f3f4f6" }}>
                   <td style={{ padding: "10px 16px", position: "sticky", left: 0, background: "#fff", zIndex: 5, borderRight: "1px solid #e5e7eb", fontWeight: 500 }}>
-                    {l.owner} · {l.place} {l.name ? `(${l.name})` : ""}
+                    {l.owner || "—"} · {l.region_name} · {l.bank_name ?? "Наличные"} {l.name ? `(${l.name})` : ""}
                   </td>
                   <td style={{ padding: "10px 16px" }}>
                     <span style={{ background: "#e5e7eb", padding: "2px 6px", borderRadius: 4, fontSize: 11 }}>{l.currency}</span>
                   </td>
-                  {datesList.map((d, dateIdx) => {
-                    const resolved = getResolvedCell(l.id, dateIdx);
+                  {effectiveDates.map((d) => {
+                    const resolved = getResolvedCell(l.id, d);
                     const isEditing = editingCell?.lineId === l.id && editingCell?.date === d;
 
-                    // Цвет фона: если черновик — DRAFT_BG, если редактируем — светло-синий, если унаследовано — чуть бледнее
                     let bg = undefined;
                     if (resolved?.is_draft) bg = DRAFT_BG;
                     if (isEditing) bg = "#eff6ff";
@@ -188,7 +209,6 @@ export function SnapshotsMatrixTab({ hide }: { hide: boolean }) {
                         onClick={() => {
                           if (!isEditing) {
                             setEditingCell({ lineId: l.id, date: d });
-                            // При клике предлагаем то значение, которое реально было введено на эту дату (или пусто)
                             const direct = directMap.get(`${l.id}_${d}`);
                             setEditValue(direct ? direct.amount : (resolved?.amount ?? ""));
                           }
