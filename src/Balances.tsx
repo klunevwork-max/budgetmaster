@@ -520,6 +520,7 @@ export function LinesTab() {
               <td style={cell}>{l.name}</td>
               <td style={cell}>{l.currency}</td>
               <td style={cell}>
+                {l.is_tax && <span style={{ marginRight: 6, padding: "2px 6px", background: "#eee", borderRadius: 4, fontSize: "11px" }}>Налог</span>}
                 {l.is_deposit ? `Депозит (${(l.interest_rate_bps / 100).toFixed(2)}%)` : "Обычный"}
               </td>
               <td style={cell}>

@@ -167,6 +167,8 @@ pub struct Line {
     pub bank_id: Option<i64>,
     pub bank_name: Option<String>,
     pub name: Option<String>,
+    pub is_deposit: bool,
+    pub interest_rate_bps: i64,
     pub is_tax: bool,
     pub currency: String,
     pub label: String,
@@ -190,7 +192,7 @@ fn make_label(owner: Option<&str>, region: &str, bank_name: Option<&str>, name: 
 
 pub fn list_lines(conn: &Connection) -> Result<Vec<Line>> {
     let mut st = conn.prepare(
-        "SELECT l.id, l.owner_id, o.name, l.region, l.kind, l.bank_id, b.name, l.name, l.currency, l.is_tax
+        "SELECT l.id, l.owner_id, o.name, l.region, l.kind, l.bank_id, b.name, l.name, l.currency, l.is_deposit, l.interest_rate_bps, l.is_tax
          FROM balance_lines l
          LEFT JOIN owners o ON o.id = l.owner_id
          LEFT JOIN banks b ON b.id = l.bank_id
@@ -214,7 +216,9 @@ pub fn list_lines(conn: &Connection) -> Result<Vec<Line>> {
             bank_name,
             name: Some(name),
             currency,
-            is_tax: r.get(9)?,
+            is_deposit: r.get(9)?,
+            interest_rate_bps: r.get(10)?,
+            is_tax: r.get(11)?,
             label,
         })
     })?;
@@ -529,7 +533,8 @@ pub fn current_balances(
             (SELECT s.amount_minor FROM balance_snapshots s
               WHERE s.line_id = l.id AND s.date <= ?1 ORDER BY s.date DESC LIMIT 1),
             COALESCE((SELECT s.is_draft FROM balance_snapshots s
-              WHERE s.line_id = l.id AND s.date <= ?1 ORDER BY s.date DESC LIMIT 1), 0)
+              WHERE s.line_id = l.id AND s.date <= ?1 ORDER BY s.date DESC LIMIT 1), 0),
+            l.is_tax, l.is_deposit, l.interest_rate_bps
          FROM balance_lines l
          LEFT JOIN owners o ON o.id = l.owner_id
          LEFT JOIN banks b ON b.id = l.bank_id
