@@ -8,7 +8,7 @@ type RateU = { kind: string; currency: string; rate: string; source_date: string
 type Report = {
   start_date: string; end_date: string; auto_start: boolean; currencies: Cur[];
   delta_with_reval: string | null; delta_no_reval: string | null; reval_effect: string | null;
-  ops_income: string; ops_expense: string; ops_net: string; ops_count: number; ops_excluded: number;
+  ops_income: string; ops_expense: string; deposit_real_income: string; ops_net: string; ops_count: number; ops_excluded: number;
   ops_by_currency: OpsCur[]; virtual_monthly: string;
   unmarked_with_reval: string | null; unmarked_no_reval: string | null;
   rates: RateU[]; warnings: string[];
@@ -166,7 +166,7 @@ export default function ReportNewTab({ hide }: { hide: boolean }) {
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
                 <tbody>
                   <tr style={{ borderBottom: "1px solid #f3f4f6" }}>
-                    <td style={{ ...cell, padding: "10px 16px" }}>Доходы</td>
+                    <td style={{ ...cell, padding: "10px 16px" }}>Доходы (включая выплаты по депозитам)</td>
                     <td style={{ ...cellR, padding: "10px 16px", color: "#16a34a" }}>{val(rep.ops_income)}</td>
                   </tr>
                   <tr style={{ borderBottom: "1px solid #f3f4f6" }}>
@@ -178,8 +178,12 @@ export default function ReportNewTab({ hide }: { hide: boolean }) {
                     <td style={{ ...cellR, padding: "10px 16px", fontWeight: 600 }}>{val(rep.ops_net)}</td>
                   </tr>
                   <tr style={{ borderBottom: "1px solid #f3f4f6" }}>
-                    <td style={{ ...cell, padding: "10px 16px" }}>Виртуальные начисления</td>
-                    <td style={{ ...cellR, padding: "10px 16px" }}>{val(rep.virtual_monthly)}</td>
+                    <td style={{ ...cell, padding: "10px 16px" }}>Начисления по депозитам (фактические)</td>
+                    <td style={{ ...cellR, padding: "10px 16px", color: "#16a34a" }}>{rep.deposit_real_income}</td>
+                  </tr>
+                  <tr style={{ borderBottom: "1px solid #f3f4f6" }}>
+                    <td style={{ ...cell, padding: "10px 16px" }}>Виртуальные начисления (будущие)</td>
+                    <td style={{ ...cellR, padding: "10px 16px" }}>{rep.virtual_monthly}</td>
                   </tr>
                 </tbody>
               </table>

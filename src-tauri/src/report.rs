@@ -224,6 +224,10 @@ pub fn calculate_deposit_accruals(
     })?;
 
     for row in rows {
+        let (id, currency, amount, rate_bps, start_str, ref end_opt, ref payout_mode) = row.as_ref().map(|r| (r.0, r.1.clone(), r.2, r.3, r.4.clone(), r.5.clone(), r.6.clone())).unwrap();
+        println!("DEBUG DEPOSIT: id={}, currency={}, amount={}, rate_bps={}, start={}, end={:?}, mode={}", id, currency, amount, rate_bps, start_str, end_opt, payout_mode);
+        let (id, currency, amount, rate_bps, start_str, ref end_opt, ref payout_mode) = row.as_ref().map(|r| (r.0, r.1.clone(), r.2, r.3, r.4.clone(), r.5.clone(), r.6.clone())).unwrap();
+        let (id, currency, amount, rate_bps, start_str, ref end_opt, ref payout_mode) = row.as_ref().map(|r| (r.0, r.1.clone(), r.2, r.3, r.4.clone(), r.5.clone(), r.6.clone())).unwrap();
         let (_id, _currency, amount, rate_bps, start_str, end_opt, payout_mode) = row?;
         if amount <= 0 { continue; }
 
@@ -243,14 +247,18 @@ pub fn calculate_deposit_accruals(
 
             if start_date >= report_end { continue; }
 
-            let target_date = report_end.min(maturity_date);
-            let days = (target_date - start_date).num_days().max(0) as i128;
-            let accrued = (amount as i128 * rate_bps as i128 * days) / (365 * 10000);
+            // 1. Реальный доход: с начала депозита по текущую дату отчёта (но не позже maturity_date)
+            let real_target = report_end.min(maturity_date);
+            let real_days = (real_target - start_date).num_days().max(0) as i128;
+            let real_accrued = (amount as i128 * rate_bps as i128 * real_days) / (365 * 10000);
+            println!("DEBUG CALC: real_days={}, real_accrued={}, amount={}, rate={}", real_days, real_accrued, amount, rate_bps);
+            real_total += real_accrued;
 
-            if report_end >= maturity_date {
-                real_total += accrued;
-            } else {
-                virtual_total += accrued;
+            // 2. Виртуальный (будущий) доход: с текущей даты отчёта до даты maturity_date (если отчёт еще до конца срока)
+            if report_end < maturity_date {
+                let future_days = (maturity_date - report_end).num_days().max(0) as i128;
+                let future_accrued = (amount as i128 * rate_bps as i128 * future_days) / (365 * 10000);
+                virtual_total += future_accrued;
             }
         } else {
             let limit_date = report_end.min(end_date);
@@ -401,6 +409,7 @@ pub fn build(conn: &Connection, p: &Period) -> Result<Report> {
     let unmarked_with = if ok_with { Some(scaled_str(delta_with - ops_net - virtual_monthly)?) } else { None };
     let unmarked_no = if ok_no { Some(scaled_str(no_reval - ops_net - virtual_monthly)?) } else { None };
 
+    println!("DEBUG FINAL REPORT: real_income={}, virtual_monthly={}", deposits.real_income, virtual_monthly);
     Ok(Report {
         start_date: p.start.clone(),
         end_date: p.end.clone(),
