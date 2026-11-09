@@ -72,12 +72,6 @@ const headerBar = {
 
 const gear = { fontSize: 18, lineHeight: 1, padding: "6px 12px", cursor: "pointer", background: "none", border: "1px solid #d1d5db", borderRadius: "6px" };
 
-const panel = {
-  position: "fixed" as const, top: 70, right: 24, width: 480, maxHeight: "85vh", overflowY: "auto" as const,
-  background: "#fff", border: "1px solid #e5e7eb", borderRadius: "12px", boxShadow: "0 20px 25px -5px rgba(0, 0, 0, 0.1)",
-  padding: 24, zIndex: 30,
-};
-
 function RecoveryChooser(props: {
   allowNone: boolean;
   kind: RecKind; setKind: (k: RecKind) => void;
@@ -290,7 +284,7 @@ export default function App() {
                 <button style={btnPrimary} onClick={() => run(() => invoke("recover_account", { name, secret, newPassword: newPw }), "Доступ восстановлен")}>Восстановить</button>
               </>
             )}
-            <button style={btnSecondary} onClick={() => setView("login")}>Назад</button>
+            <button style={btnSecondary} onClick={() => setView("login")} >Назад</button>
           </div>
         </div>
       )}
@@ -317,7 +311,7 @@ export default function App() {
                   </div>
                 </>
               ) : (
-                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                <div style={{ display: "flex", flexDirection: "column", tag: 8 }}>
                   <span style={{ fontSize: 13, fontWeight: 500, color: "#374151" }}>Задать пароль</span>
                   <input type="password" placeholder="Новый пароль (≥ 8 символов)" value={newPw} onChange={(e) => setNewPw(e.target.value)} style={inputStyle} />
                   <button style={btnSecondary} onClick={() => run(() => invoke("change_password", { oldPassword: "", newPassword: newPw }), "Пароль задан")}>Задать пароль</button>

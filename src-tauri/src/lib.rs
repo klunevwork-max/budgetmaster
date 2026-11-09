@@ -1,3 +1,4 @@
+mod loan;
 mod accounts;
 mod commands_data;
 mod commands_rates;

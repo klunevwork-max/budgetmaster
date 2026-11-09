@@ -1,3 +1,5 @@
+import { CashFlowTab } from "./CashFlowTab";
+import { LoansTab } from "./LoansTab";
 import { AccountsNewTab } from "./AccountsNewTab";
 import ReportNewTab from "./ReportNewTab";
 import { SnapshotsMatrixTab } from "./SnapshotsMatrix";
@@ -192,9 +194,11 @@ const stickyTabs = {
   display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap" as const, gap: 8
 };
 
-type Tab = "accounts_new" | "rep_new" | "matrix_input" | "cur" | "cur_new" | "rep" | "snap" | "lines" | "ops" | "cats" | "rates";
+type Tab = "cashflow" | "loans" | "accounts_new" | "rep_new" | "matrix_input" | "cur" | "cur_new" | "rep" | "snap" | "lines" | "ops" | "cats" | "rates";
 
 const ALL_TABS: Record<Tab, string> = {
+  cashflow: "Денежный поток",
+  loans: "Кредиты",
   cur: "Актуальные балансы",
   matrix_input: "Ввод (Матрица)",
   cur_new: "Балансы (новый дизайн)",
@@ -309,7 +313,7 @@ export default function Main({
   setExternalSettingsOpen: (v: boolean) => void;
   authSettingsContent?: ReactNode;
 }) {
-  const DEFAULT_ORDER: Tab[] = ["cur", "matrix_input", "cur_new", "rep", "rep_new", "snap", "lines", "accounts_new", "ops", "cats", "rates"];
+  const DEFAULT_ORDER: Tab[] = ["cashflow", "loans", "cur", "matrix_input", "cur_new", "rep", "rep_new", "snap", "lines", "accounts_new", "ops", "cats", "rates"];
   
   const [tabOrder, setTabOrder] = useState<Tab[]>(() => {
     try {
@@ -443,6 +447,9 @@ export default function Main({
       {tab === "cats" && <Categories />}
       {tab === "rates" && <RatesTab />}
       {tab === "matrix_input" && <SnapshotsMatrixTab hide={hide} />}
+
+      {tab === "cashflow" && <CashFlowTab />}
+      {tab === "loans" && <LoansTab />}
     </div>
   );
 }
